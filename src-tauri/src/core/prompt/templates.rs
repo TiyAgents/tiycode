@@ -264,6 +264,7 @@ where
     embedded: &'static str,
     declared_keys: &'static [&'static str],
     resolve_fn: F,
+    spec_version: u32,
 }
 
 impl<F> TemplateSource<F>
@@ -275,12 +276,14 @@ where
         embedded: &'static str,
         declared_keys: &'static [&'static str],
         resolve_fn: F,
+        spec_version: u32,
     ) -> Self {
         Self {
             rel_path,
             embedded,
             declared_keys,
             resolve_fn,
+            spec_version,
         }
     }
 }
@@ -292,8 +295,19 @@ where
 {
     async fn build(&self, cx: &BuildCx<'_>) -> Result<SectionOutcome, FatalError> {
         let raw = load_template(self.rel_path, self.embedded);
-        let (_tmpl, body) = parse_front_matter(&raw)
+        let (tmpl, body) = parse_front_matter(&raw)
             .map_err(|e| FatalError::new("template.parse", format!("{}: {}", self.rel_path, e)))?;
+
+        // § 3.20: template front-matter version must match SectionSpec.version
+        if tmpl.version != self.spec_version {
+            return Err(FatalError::new(
+                "template.version_mismatch",
+                format!(
+                    "{}: template front-matter version {} != spec version {}",
+                    self.rel_path, tmpl.version, self.spec_version
+                ),
+            ));
+        }
 
         if body.trim().is_empty() {
             return Ok(SectionOutcome::Skip);
@@ -471,10 +485,7 @@ mod tests {
         let bytes = body.as_bytes();
 
         while i < bytes.len() {
-            if bytes[i] == b'{'
-                && i + 1 < bytes.len()
-                && bytes[i + 1] == b'{'
-            {
+            if bytes[i] == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
                 // Found "{{"
                 let start = i + 2;
                 // Look for "}}"

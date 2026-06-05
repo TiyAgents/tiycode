@@ -13,7 +13,15 @@ const DECLARED_KEYS: &[&'static str] = &["response_language_line"];
 
 /// Template-backed SectionSource for the CompactionContract section.
 /// Replaces LegacyCompactionContractSource's hardcoded strings.
-pub struct CompactionContractSource;
+pub struct CompactionContractSource {
+    spec_version: u32,
+}
+
+impl CompactionContractSource {
+    pub fn new(spec_version: u32) -> Self {
+        Self { spec_version }
+    }
+}
 
 #[async_trait]
 impl SectionSource for CompactionContractSource {
@@ -30,12 +38,22 @@ impl SectionSource for CompactionContractSource {
         };
 
         let raw = load_template(rel_path, embedded);
-        let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
+        let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
                 super::error_codes::codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", rel_path, e),
             )
         })?;
+
+        if tmpl.version != self.spec_version {
+            return Err(FatalError::new(
+                "template.version_mismatch",
+                format!(
+                    "{}: template front-matter version {} != spec version {}",
+                    rel_path, tmpl.version, self.spec_version
+                ),
+            ));
+        }
 
         let response_language_line = build_response_language_line(cx.response_language);
 

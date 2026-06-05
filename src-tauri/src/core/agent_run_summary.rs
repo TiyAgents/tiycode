@@ -127,8 +127,8 @@ async fn build_compaction_system_prompt(
     response_language: Option<&str>,
 ) -> String {
     use crate::core::prompt::{
-        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor,
-        PromptSurface, RunMode, SectionId, SignalCache, SourceExecPolicy, SystemClock,
+        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptSurface, RunMode,
+        SectionId, SignalCache, SourceExecPolicy, SystemClock,
     };
     use std::sync::Arc;
 

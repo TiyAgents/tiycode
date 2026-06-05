@@ -1,17 +1,17 @@
-// Legacy modules (kept for backward compat during migration)
+// ── Section sources (one per SectionId) ──────────────────────────
 pub mod active_goal_source;
 pub mod active_plan_source;
-pub mod assembler;
 pub mod compaction_contract_source;
-pub mod context;
 pub mod profile_instructions_source;
-pub mod providers;
-pub mod section;
 pub mod skills_source;
 pub mod subagent_output_contract_source;
+pub mod template_sources;
 pub mod title_contract_source;
 
-// New modules (Phase 0+)
+// ── Backward-compat test utilities (not used in production) ─────
+pub mod providers;
+
+// ── Core architecture modules ───────────────────────────────────
 pub mod budget;
 pub mod build_context;
 pub mod cache_marker;
@@ -32,15 +32,9 @@ pub mod section_source;
 pub mod signals;
 pub mod surface;
 pub mod surface_extensions;
-pub mod template_sources;
 pub mod templates;
 
-// Legacy re-exports
-pub use assembler::build_system_prompt;
-pub use context::PromptBuildContext;
-pub use section::{PromptPhase, PromptSection, PromptSectionProvider};
-
-// New re-exports (additive)
+// ── Core re-exports ──────────────────────────────────────────────
 pub use budget::PromptBudget;
 pub use build_context::{BuildCx, ModelTarget};
 pub use cache_marker::{CacheMarker, CacheMarkerArbiter, CacheMarkerSlot, PromptBlock};

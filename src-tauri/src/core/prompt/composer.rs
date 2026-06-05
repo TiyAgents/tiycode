@@ -148,8 +148,7 @@ impl Composer {
                     bodies.push((spec, layer, body, Some(merged_warning), elapsed));
                 }
                 SectionOutcome::Skip => { /* silently skip */ }
-                SectionOutcome::SoftFailed { .. } => { /* silently skip */
-                }
+                SectionOutcome::SoftFailed { .. } => { /* silently skip */ }
             }
         }
 

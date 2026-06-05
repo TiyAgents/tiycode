@@ -10,7 +10,15 @@ const DECLARED_KEYS: &[&'static str] = &[];
 
 /// Template-backed SectionSource for the TitleContract section.
 /// Replaces LegacyTitleContractSource's hardcoded string.
-pub struct TitleContractSource;
+pub struct TitleContractSource {
+    spec_version: u32,
+}
+
+impl TitleContractSource {
+    pub fn new(spec_version: u32) -> Self {
+        Self { spec_version }
+    }
+}
 
 #[async_trait]
 impl SectionSource for TitleContractSource {
@@ -20,12 +28,22 @@ impl SectionSource for TitleContractSource {
 
     async fn build(&self, _cx: &BuildCx<'_>) -> Result<SectionOutcome, FatalError> {
         let raw = load_template(TEMPLATE_REL_PATH, TEMPLATE_EMBEDDED);
-        let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
+        let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
                 super::error_codes::codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", TEMPLATE_REL_PATH, e),
             )
         })?;
+
+        if tmpl.version != self.spec_version {
+            return Err(FatalError::new(
+                "template.version_mismatch",
+                format!(
+                    "{}: template front-matter version {} != spec version {}",
+                    TEMPLATE_REL_PATH, tmpl.version, self.spec_version
+                ),
+            ));
+        }
 
         let vars = TemplateVars::new();
         let rendered = render_template_strict(&body, DECLARED_KEYS, &vars).map_err(|e| {

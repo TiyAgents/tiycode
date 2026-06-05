@@ -15,7 +15,15 @@ const DECLARED_KEYS: &[&'static str] = &[];
 
 /// Template-backed SectionSource for the SubagentOutputContract section.
 /// Replaces LegacySubagentOutputContractSource's hardcoded strings.
-pub struct SubagentOutputContractSource;
+pub struct SubagentOutputContractSource {
+    spec_version: u32,
+}
+
+impl SubagentOutputContractSource {
+    pub fn new(spec_version: u32) -> Self {
+        Self { spec_version }
+    }
+}
 
 #[async_trait]
 impl SectionSource for SubagentOutputContractSource {
@@ -39,12 +47,22 @@ impl SectionSource for SubagentOutputContractSource {
         };
 
         let raw = load_template(rel_path, embedded);
-        let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
+        let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
                 super::error_codes::codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", rel_path, e),
             )
         })?;
+
+        if tmpl.version != self.spec_version {
+            return Err(FatalError::new(
+                "template.version_mismatch",
+                format!(
+                    "{}: template front-matter version {} != spec version {}",
+                    rel_path, tmpl.version, self.spec_version
+                ),
+            ));
+        }
 
         let vars = TemplateVars::new();
         let rendered = render_template_strict(&body, DECLARED_KEYS, &vars).map_err(|e| {

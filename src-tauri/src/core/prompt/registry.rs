@@ -95,6 +95,7 @@ pub fn default_registry() -> SectionRegistry {
             include_str!("templates/role.md"),
             &[],
             |_cx| Ok(TemplateVars::new()),
+            1,
         )),
     });
 
@@ -115,6 +116,7 @@ pub fn default_registry() -> SectionRegistry {
             include_str!("templates/behavioral_guidelines.md"),
             &[],
             |_cx| Ok(TemplateVars::new()),
+            1,
         )),
     });
 
@@ -132,6 +134,7 @@ pub fn default_registry() -> SectionRegistry {
             include_str!("templates/final_response_structure.md"),
             &[],
             |_cx| Ok(TemplateVars::new()),
+            1,
         )),
     });
 
@@ -159,6 +162,7 @@ pub fn default_registry() -> SectionRegistry {
                 let shell = crate::core::shell_runtime::current_shell();
                 Ok(TemplateVars::new().insert("shell", shell))
             },
+            1,
         )),
     });
 
@@ -190,7 +194,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::NonCritical,
-        source: Box::new(ProjectContextSource),
+        source: Box::new(ProjectContextSource::new(1)),
     });
 
     registry.register(SectionSpec {
@@ -223,7 +227,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(SystemEnvironmentSource),
+        source: Box::new(SystemEnvironmentSource::new(1)),
     });
 
     registry.register(SectionSpec {
@@ -235,7 +239,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(SandboxPermissionsSource),
+        source: Box::new(SandboxPermissionsSource::new(1)),
     });
 
     registry.register(SectionSpec {
@@ -247,7 +251,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(RunModeSource),
+        source: Box::new(RunModeSource::new(1)),
     });
 
     registry.register(SectionSpec {
@@ -262,7 +266,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(WorkspaceLocationSource),
+        source: Box::new(WorkspaceLocationSource::new(1)),
     });
 
     // ── Subagent sections ────────────────────────────────────────────
@@ -275,7 +279,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(SubagentOutputContractSource),
+        source: Box::new(SubagentOutputContractSource::new(1)),
     });
 
     registry.register(SectionSpec {
@@ -327,7 +331,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::NonCritical,
-        source: Box::new(CompactionContractSource),
+        source: Box::new(CompactionContractSource::new(1)),
     });
 
     registry.register(SectionSpec {
@@ -339,7 +343,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::NonCritical,
-        source: Box::new(TitleContractSource),
+        source: Box::new(TitleContractSource::new(1)),
     });
 
     registry

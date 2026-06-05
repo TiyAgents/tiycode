@@ -20,7 +20,15 @@ const DECLARED_KEYS: &[&'static str] = &[
 
 /// SectionSource for SandboxPermissions, backed by a template file.
 /// Reads approval_policy + writable_roots from settings, and run_mode from BuildCx.
-pub struct SandboxPermissionsSource;
+pub struct SandboxPermissionsSource {
+    spec_version: u32,
+}
+
+impl SandboxPermissionsSource {
+    pub fn new(spec_version: u32) -> Self {
+        Self { spec_version }
+    }
+}
 
 #[async_trait]
 impl SectionSource for SandboxPermissionsSource {
@@ -75,12 +83,22 @@ impl SectionSource for SandboxPermissionsSource {
         };
 
         let raw = load_template(TEMPLATE_REL_PATH, TEMPLATE_EMBEDDED);
-        let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
+        let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
                 codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", TEMPLATE_REL_PATH, e),
             )
         })?;
+
+        if tmpl.version != self.spec_version {
+            return Err(FatalError::new(
+                "template.version_mismatch",
+                format!(
+                    "{}: template front-matter version {} != spec version {}",
+                    TEMPLATE_REL_PATH, tmpl.version, self.spec_version
+                ),
+            ));
+        }
 
         let vars = TemplateVars::new()
             .insert_user_text("workspace_path", cx.workspace_path)
@@ -139,7 +157,15 @@ const SYSENV_TEMPLATE_REL_PATH: &str = "system_environment.tpl.md";
 const SYSENV_TEMPLATE_EMBEDDED: &str = include_str!("templates/system_environment.tpl.md");
 const SYSENV_DECLARED_KEYS: &[&'static str] = &["os", "arch", "shell"];
 
-pub struct SystemEnvironmentSource;
+pub struct SystemEnvironmentSource {
+    spec_version: u32,
+}
+
+impl SystemEnvironmentSource {
+    pub fn new(spec_version: u32) -> Self {
+        Self { spec_version }
+    }
+}
 
 #[async_trait]
 impl SectionSource for SystemEnvironmentSource {
@@ -149,12 +175,22 @@ impl SectionSource for SystemEnvironmentSource {
 
     async fn build(&self, _cx: &BuildCx<'_>) -> Result<SectionOutcome, FatalError> {
         let raw = load_template(SYSENV_TEMPLATE_REL_PATH, SYSENV_TEMPLATE_EMBEDDED);
-        let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
+        let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
                 codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", SYSENV_TEMPLATE_REL_PATH, e),
             )
         })?;
+
+        if tmpl.version != self.spec_version {
+            return Err(FatalError::new(
+                "template.version_mismatch",
+                format!(
+                    "{}: template front-matter version {} != spec version {}",
+                    SYSENV_TEMPLATE_REL_PATH, tmpl.version, self.spec_version
+                ),
+            ));
+        }
         let vars = TemplateVars::new()
             .insert("os", std::env::consts::OS)
             .insert("arch", std::env::consts::ARCH)
@@ -181,7 +217,15 @@ const WSLOC_TEMPLATE_REL_PATH: &str = "workspace_location.tpl.md";
 const WSLOC_TEMPLATE_EMBEDDED: &str = include_str!("templates/workspace_location.tpl.md");
 const WSLOC_DECLARED_KEYS: &[&'static str] = &["workspace_path"];
 
-pub struct WorkspaceLocationSource;
+pub struct WorkspaceLocationSource {
+    spec_version: u32,
+}
+
+impl WorkspaceLocationSource {
+    pub fn new(spec_version: u32) -> Self {
+        Self { spec_version }
+    }
+}
 
 #[async_trait]
 impl SectionSource for WorkspaceLocationSource {
@@ -191,12 +235,22 @@ impl SectionSource for WorkspaceLocationSource {
 
     async fn build(&self, cx: &BuildCx<'_>) -> Result<SectionOutcome, FatalError> {
         let raw = load_template(WSLOC_TEMPLATE_REL_PATH, WSLOC_TEMPLATE_EMBEDDED);
-        let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
+        let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
                 codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", WSLOC_TEMPLATE_REL_PATH, e),
             )
         })?;
+
+        if tmpl.version != self.spec_version {
+            return Err(FatalError::new(
+                "template.version_mismatch",
+                format!(
+                    "{}: template front-matter version {} != spec version {}",
+                    WSLOC_TEMPLATE_REL_PATH, tmpl.version, self.spec_version
+                ),
+            ));
+        }
         let vars = TemplateVars::new().insert_user_text("workspace_path", cx.workspace_path);
         let rendered = render_template_strict(&body, WSLOC_DECLARED_KEYS, &vars).map_err(|e| {
             FatalError::new(
@@ -223,7 +277,15 @@ const PROJCTX_DECLARED_KEYS: &[&'static str] = &["file_name", "content", "trunca
 const WORKSPACE_INSTRUCTION_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md", "AGENT.MD"];
 const WORKSPACE_INSTRUCTION_MAX_CHARS: usize = 12_800;
 
-pub struct ProjectContextSource;
+pub struct ProjectContextSource {
+    spec_version: u32,
+}
+
+impl ProjectContextSource {
+    pub fn new(spec_version: u32) -> Self {
+        Self { spec_version }
+    }
+}
 
 #[async_trait]
 impl SectionSource for ProjectContextSource {
@@ -238,12 +300,22 @@ impl SectionSource for ProjectContextSource {
         };
 
         let raw = load_template(PROJCTX_TEMPLATE_REL_PATH, PROJCTX_TEMPLATE_EMBEDDED);
-        let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
+        let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
                 codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", PROJCTX_TEMPLATE_REL_PATH, e),
             )
         })?;
+
+        if tmpl.version != self.spec_version {
+            return Err(FatalError::new(
+                "template.version_mismatch",
+                format!(
+                    "{}: template front-matter version {} != spec version {}",
+                    PROJCTX_TEMPLATE_REL_PATH, tmpl.version, self.spec_version
+                ),
+            ));
+        }
 
         let truncated_marker = if snippet.truncated {
             "\n[Truncated for prompt size.]"
@@ -335,7 +407,15 @@ const RUN_MODE_DEFAULT_TEMPLATE: &str = "run_mode.default.md";
 const RUN_MODE_DEFAULT_EMBEDDED: &str = include_str!("templates/run_mode.default.md");
 const RUN_MODE_DECLARED_KEYS: &[&'static str] = &["term_panel_usage_note"];
 
-pub struct RunModeSource;
+pub struct RunModeSource {
+    spec_version: u32,
+}
+
+impl RunModeSource {
+    pub fn new(spec_version: u32) -> Self {
+        Self { spec_version }
+    }
+}
 
 #[async_trait]
 impl SectionSource for RunModeSource {
@@ -351,9 +431,19 @@ impl SectionSource for RunModeSource {
         };
 
         let raw = load_template(rel_path, embedded);
-        let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
+        let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(codes::TEMPLATE_NOT_FOUND, format!("{}: {}", rel_path, e))
         })?;
+
+        if tmpl.version != self.spec_version {
+            return Err(FatalError::new(
+                "template.version_mismatch",
+                format!(
+                    "{}: template front-matter version {} != spec version {}",
+                    rel_path, tmpl.version, self.spec_version
+                ),
+            ));
+        }
 
         let vars = TemplateVars::new().insert(
             "term_panel_usage_note",
@@ -375,5 +465,155 @@ impl SectionSource for RunModeSource {
                 ..Default::default()
             },
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::build_context::{BuildCx, ModelTarget};
+    use super::super::clock::FixedClock;
+    use super::super::renderer::MarkdownRenderer;
+    use super::super::run_mode::RunMode;
+    use super::super::section_source::SectionSource;
+    use super::super::signals::SignalCache;
+    use super::{RunModeSource, SystemEnvironmentSource};
+    use std::sync::Arc;
+
+    /// Construct a minimal BuildCx for testing sources that don't need DB access.
+    async fn test_cx() -> BuildCx<'static> {
+        let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+        let pool_ref = Box::leak(Box::new(pool));
+        BuildCx {
+            pool: pool_ref,
+            workspace_path: "/test/workspace",
+            thread_id: None,
+            run_id: None,
+            raw_plan: None,
+            run_mode: RunMode::Default,
+            helper_profile: None,
+            custom_subagent_slug: None,
+            target_model: ModelTarget::AnthropicClaude {
+                context_window: 200_000,
+                supports_cache_control: true,
+            },
+            clock: Arc::new(FixedClock::new(chrono::Utc::now())),
+            signals: Arc::new(SignalCache::new()),
+            renderer: Arc::new(MarkdownRenderer),
+            response_language: None,
+        }
+    }
+
+    /// § 3.18: source_idempotency — same BuildCx must produce the same output.
+    /// SystemEnvironmentSource is fully deterministic (env::consts only).
+    #[tokio::test]
+    async fn source_idempotency_system_environment() {
+        let cx = test_cx().await;
+        let source = SystemEnvironmentSource::new(1);
+
+        let out1 = source.build(&cx).await.unwrap();
+        let out2 = source.build(&cx).await.unwrap();
+
+        match (&out1, &out2) {
+            (
+                super::super::section_source::SectionOutcome::Produced(b1),
+                super::super::section_source::SectionOutcome::Produced(b2),
+            ) => {
+                assert_eq!(
+                    b1.markdown, b2.markdown,
+                    "SystemEnvironmentSource is not idempotent"
+                );
+            }
+            _ => panic!("expected Produced outcomes"),
+        }
+    }
+
+    /// § 3.18: source_determinism — output must be stable under deterministic inputs.
+    /// SystemEnvironment produces the same OS/arch/shell for a given machine.
+    #[tokio::test]
+    async fn source_determinism_system_environment() {
+        let cx = test_cx().await;
+        let source = SystemEnvironmentSource::new(1);
+
+        // Build 3 times; all should be identical
+        let mut prev: Option<String> = None;
+        for i in 0..3 {
+            let out = source.build(&cx).await.unwrap();
+            if let super::super::section_source::SectionOutcome::Produced(b) = out {
+                if let Some(ref p) = prev {
+                    assert_eq!(
+                        &b.markdown, p,
+                        "SystemEnvironmentSource output diverged on build {}",
+                        i
+                    );
+                }
+                prev = Some(b.markdown);
+            } else {
+                panic!("expected Produced on build {}", i);
+            }
+        }
+    }
+
+    /// RunModeSource idempotency across both plan and default modes.
+    #[tokio::test]
+    async fn source_idempotency_run_mode() {
+        let source = RunModeSource::new(1);
+
+        for mode in &[RunMode::Default, RunMode::Plan] {
+            let cx = test_cx().await;
+            // Create a separate cx for each mode to avoid mutability issues.
+            let cx_mode = BuildCx {
+                run_mode: *mode,
+                ..cx
+            };
+
+            let out1 = source.build(&cx_mode).await.unwrap();
+            let out2 = source.build(&cx_mode).await.unwrap();
+
+            match (&out1, &out2) {
+                (
+                    super::super::section_source::SectionOutcome::Produced(b1),
+                    super::super::section_source::SectionOutcome::Produced(b2),
+                ) => {
+                    assert_eq!(
+                        b1.markdown, b2.markdown,
+                        "RunModeSource is not idempotent for {:?}",
+                        mode
+                    );
+                }
+                _ => panic!("expected Produced for {:?}", mode),
+            }
+        }
+    }
+
+    /// RunModeSource: plan mode and default mode must produce different outputs.
+    #[tokio::test]
+    async fn run_mode_plan_vs_default_differ() {
+        let source = RunModeSource::new(1);
+        let base_cx = test_cx().await;
+
+        let cx_plan = BuildCx {
+            run_mode: RunMode::Plan,
+            ..base_cx.clone()
+        };
+        let cx_default = BuildCx {
+            run_mode: RunMode::Default,
+            ..base_cx
+        };
+
+        let out_plan = source.build(&cx_plan).await.unwrap();
+        let out_default = source.build(&cx_default).await.unwrap();
+
+        match (&out_plan, &out_default) {
+            (
+                super::super::section_source::SectionOutcome::Produced(bp),
+                super::super::section_source::SectionOutcome::Produced(bd),
+            ) => {
+                assert_ne!(
+                    bp.markdown, bd.markdown,
+                    "plan and default run_mode must produce different output"
+                );
+            }
+            _ => panic!("expected Produced outcomes"),
+        }
     }
 }
