@@ -36,7 +36,6 @@
 | `estimated_tokens` 通过 `Tokenizer` trait 产出，默认 chars/4 启发式 | § 3.11 |
 | Section 渲染抽象 `SectionRenderer`（Markdown / XML 等） | § 3.14 |
 | `SectionOrder::Anchored` 解析规则 + 启动期 lint | § 3.4 |
-| `PromptFeatureSet` 灰度配置加载与作用域 | § 3.15 |
 | 模板用户文本不二次展开占位符 | § 3.9 |
 | 子代理 surface 携带 `inherited_run_mode` | § 3.2.1 |
 | Compaction 输入预过滤 RuntimeMessage | § 3.7 |
@@ -55,7 +54,6 @@
 | `PromptBudget::for_model` 按 model context window 计算 | § 3.12 |
 | `CustomSubagent` 的 `cache_stability` 进入 `PromptSurface`（非 profile） | § 3.2.1 |
 | `BuildCx` 完整字段（含 `custom_subagent_slug` / `target_model` / `clock`） | § 3.6 |
-| `PromptFeatureSet` 与 `schema_version` 的 bump 关系 | § 3.15 |
 | `SectionRenderer` 灰度切换路径（与 schema_version 协同） | § 3.14 |
 | `Composer::render_section_only` 隔离 BuildCx | § 3.21 |
 | `Composer` 入口签名：registry 在构造时注入，`build` 不传 | § 3.3 / § 6 |
@@ -628,7 +626,6 @@ pub struct BuildCx<'a> {
     pub signals: Arc<SignalCache>,
     /// 软配置：feature flag、A/B 实验、按模型 capability 切换；
     /// 通过 BuildCx 注入而非修改 registry，hot-path 无锁
-    pub features: Arc<PromptFeatureSet>,
     /// 渲染器（§ 3.14）：由调用方根据目标 LLM provider 选择
     pub renderer: Arc<dyn SectionRenderer>,
 }
@@ -686,7 +683,6 @@ enum SignalResult {
 - **失败缓存**：init 失败时写入 `Failed(SignalFailure)` 而非让 `OnceCell` 永久 poison。同一 cx 内不重试，但下一次 build（新 cache）可重新尝试——避免一次瞬时 IO 抖动让整次 build 永远不可恢复
 - **循环依赖检测**：`SignalSlot::in_flight = true` 进入 init；若同一 cx 内同一 (TypeId, SignalKey) 在 in_flight 时再次被请求 → 返回 `Failed(SignalFailure::Cycle { chain })`，由消费方决定走 SoftFailed 还是 FatalError；`cargo test prompt::signal_cycle_detected` 覆盖
 
-`Composer` 进程内单例 `Arc<Composer>`，registry 不可变；`PromptFeatureSet` 走 `BuildCx` 而非 registry，便于 A/B 实验热切换。
 
 #### 3.6.1 Source 执行模型（超时 / 并发 / 背压 / 重入）
 
@@ -858,7 +854,6 @@ SectionSpec {
 | `run_mode` | 由 surface 携带的 `inherited_run_mode` 决定（见 § 3.2.1） |
 | `helper_profile` | `Some(&helper_profile)`；主代理路径下为 `None` |
 | `signals` | **新建空 `SignalCache`**——隔离父子 build 的缓存，防止父 build 的脏数据泄露到 helper；workspace / project 类查询会被 helper 重新执行（同一 workspace 路径，结果应一致） |
-| `features` | 复用父 `Arc<PromptFeatureSet>`（同会话灰度同步） |
 | `renderer` | 由 helper 调用方根据目标模型重新选择（helper 可能用不同 model 与不同 renderer） |
 
 > **隔离 vs 复用的取舍**：`signals` 不复用是为了切断"父侧失败的 SoftFailed 信号污染 helper" 的路径，代价是 helper 可能重复一次 DB 查询——可接受。当某 signal 极昂贵（例如索引整个 workspace），通过 `SignalCache::shareable_for_helper(&parent)` 的白名单复用机制开放复用。
@@ -1141,67 +1136,10 @@ pub struct XmlRenderer;
 
 `SectionRenderer` 是**全局影响**的开关——切换会让 system prompt 字面 100% 改变，prefix cache 全量失效。因此切换不能简单 PR 合并即生效，必须遵循：
 
-1. **不通过 `PromptFeatureSet` 静默切换**：feature flag 用于 Section 级开关，全局 renderer 切换走 § 3.19 schema_version 显式 bump
 2. **新 renderer 实现先并行存在**：以 `RendererCandidate { name, instance, enabled_models: HashSet<ModelTarget> }` 注册到 `RendererRegistry`，不替换默认
 3. **per-model 灰度**：`BuildCx::renderer` 由调用方根据 `ModelTarget` 选取——同进程不同模型可使用不同 renderer，互不影响 cache
-4. **流量灰度**：通过 `PROMPT_RENDERER_OVERRIDE = "xml@anthropic-claude:5%"` 环境变量按 thread_id hash 分桶；与 `PromptFeatureSet` 共享 salt 但**单独审计**
 5. **schema_version bump**：每次默认 renderer 变更必须 bump `registry.schema_version`（§ 3.19 表格已列出此规则），方便事故复盘按 schema_version 切片
 6. **回退**：旧 renderer 至少保留两个发版周期（约 4 周）才允许移除；环境变量 `PROMPT_RENDERER_FORCE = "markdown"` 提供应急回退
-
-### 3.15 灰度配置：`PromptFeatureSet`
-
-```rust
-pub struct PromptFeatureSet {
-    flags: HashMap<&'static str, FeatureValue>,
-}
-
-pub enum FeatureValue {
-    Bool(bool),
-    Percent(u8),    // 0..=100，按 thread_id hash 分桶
-    Variant(&'static str),
-}
-
-impl PromptFeatureSet {
-    pub fn is_enabled(&self, key: &'static str, salt: &str) -> bool { … }
-    pub fn variant(&self, key: &'static str, salt: &str) -> Option<&'static str> { … }
-}
-```
-
-**作用域规则**：
-
-1. **加载时机**：`PromptFeatureSet` 在 `Composer` 入口构建一次，写入 `BuildCx`；同一次 build 内不变化
-2. **加载来源（按优先级）**：
-   - 进程启动时读 `PROMPT_FEATURES` 环境变量（JSON 字符串）
-   - `~/.config/tiycode/prompt_features.json`（用户级）
-   - 工作区 `.tiycode/prompt_features.json`（工作区级）
-   - 远程灰度服务（可选，未来扩展）
-3. **分桶 salt**：用 `thread_id`（无 thread 时回退到 `workspace_path` hash），保证同一会话灰度结果稳定
-4. **Section 端使用**：
-
-```rust
-async fn build(&self, cx: &BuildCx<'_>) -> Result<SectionOutcome, FatalError> {
-    if !cx.features.is_enabled("skills_brief_v2", cx.thread_id.unwrap_or("")) {
-        return Ok(SectionOutcome::Skip);
-    }
-    …
-}
-```
-
-5. **审计**：每次 build 在 `ComposedPrompt.audit` 顶层 `feature_snapshot` 字段记录所有被 Section 实际读取过的 flag → value，便于复盘"这次为什么走了 v2 分支"
-6. **测试**：每个用到 flag 的 Source 必须有 _flag-on / flag-off_ 两份快照测试
-
-**与 `schema_version` 的关系**：
-
-| 操作 | bump `schema_version` | bump 该 Section `version` |
-|------|----------------------|--------------------------|
-| 新增 flag（默认 off，`Skip` 分支等价于 flag 不存在） | ❌ | ❌ |
-| 新增 flag（默认 on，立刻改变行为） | ✅ | ✅ |
-| 调整 flag 默认值 | ✅ | ❌ |
-| 调整 flag rollout 百分比（线上灰度推进） | ❌ | ❌ |
-| 删除已 100% 上线的 flag（代码合并 v2 分支为唯一路径） | ❌ | ❌（已在上线时 bump） |
-| 临时把 flag 强制翻面（应急 kill switch） | ❌ | ❌（事后补 bump） |
-
-设计原则：flag 是**软配置**，运行时切换不应触发审计 schema 跳变；但默认值变化会改变绝大多数会话的行为，等同于"改了一行模板"，必须 bump 与 Section `version`。flag 引入时若**默认 off**，不视为行为变更，避免每次实验都 bump schema。
 
 ### 3.16 Surface 扩展点：闭包枚举 + 单点新增
 
@@ -1222,7 +1160,7 @@ pub trait SurfaceExtension {
 }
 ```
 
-启动期 `cargo test prompt::surface_extensions_complete` 用 `strum::EnumIter` 遍历 `PromptSurface` 所有变体，对每个变体解析 `SurfaceExtension` 实现；任意一项缺失 → 测试失败。**新增 Surface 时只需在一个文件 `surface_extensions.rs` 实现该 trait**，无需散落地修改五处。
+启动期 `cargo test prompt::surface_extensions_complete` 用 `strum::EnumIter` 遍历 `PromptSurface` 所有变体，对每个变体解析 `SurfaceExtension` 实现；任意一项缺失 → 测试失败。**新增 Surface 时只需在一个文件 `surface_extensions.rs` 实现该 trait**，无需散落地修改四处。
 
 ### 3.18 Source 副作用约束：只读、幂等、可重放
 
@@ -1386,7 +1324,7 @@ pub const SUBAGENT_INHERITED_SECTIONS: &[(SubagentSurfaceKind, &[SectionId])] = 
 
 ### 阶段 0：脚手架（不改语义）
 
-1. 在 `prompt/` 下新增模块：`layer.rs`、`surface.rs`、`section_id.rs`、`registry.rs`、`composer.rs`、`signals.rs`、`templates.rs`、`budget.rs`、`runtime_message.rs`、`exec_policy.rs`、`cache_marker.rs`、`surface_extensions.rs`、`error_codes.rs`、`redactor.rs`、`renderer.rs`、`feature_set.rs`、`inheritance.rs`、`clock.rs`，但**不接通**到 `agent_session`
+1. 在 `prompt/` 下新增模块：`layer.rs`、`surface.rs`、`section_id.rs`、`registry.rs`、`composer.rs`、`signals.rs`、`templates.rs`、`budget.rs`、`runtime_message.rs`、`exec_policy.rs`、`cache_marker.rs`、`surface_extensions.rs`、`error_codes.rs`、`redactor.rs`、`renderer.rs`、`inheritance.rs`、`clock.rs`，但**不接通**到 `agent_session`
 2. 引入新类型：`SectionOutcome`、`SurfacePattern`/`SurfaceMatcher`、`SubagentCacheStability`、`LayerResolver`、`PromptBlock`/`CacheMarker`、`PromptBudget`/`ModelTarget`、`schema_version`、`SourceExecPolicy`、`CacheMarkerArbiter`、`SurfaceExtension`、`Clock`，仅在适配层使用，不影响行为
 3. 新增 `prompt/templates/*.md` 目录，仅复制（不修改）现有字面量；**模板 front-matter（§ 3.20）+ 严格模式 + 启动期 lint 测试**全部上线
 4. 新增 `SectionSource` trait 与适配器 `LegacyProviderAdapter`，把现有 5 个 `*Provider` 包成 `SectionSource`，但仍允许旧路径并存
@@ -1460,7 +1398,6 @@ hash_match < 100% 时，diff 必须落在以下"已知良性差异"之一才允�
 ### 阶段 7：可观测、灰度与告警
 
 1. 接通 `tracing` 与现有 metrics 通道；为 PromptComposer 添加 dashboards 字段
-2. 引入 `PromptFeatureSet`：用于 A/B 控制（例如 `enable_skills_brief: bool`），便于线上灰度新文案而无需立即下线旧版本
 3. 上线核心告警阈值：
    - `prompt.budget.evicted_ratio > 0.5%` → P2
    - `prompt.budget.truncated_ratio > 1%` → P2
@@ -1493,7 +1430,6 @@ src-tauri/src/core/prompt/
 ├── error_codes.rs             # SoftFailed.code 常量集中注册（§ 3.18）
 ├── redactor.rs                # PII 脱敏（tracing 字段 + warning 落库前过滤）
 ├── renderer.rs                # SectionRenderer + Markdown/Xml + RendererRegistry（§ 3.14 灰度切换）
-├── feature_set.rs             # PromptFeatureSet + flag 加载（env / 用户级 / 工作区级）
 ├── inheritance.rs             # SUBAGENT_INHERITED_SECTIONS + lint（§ 3.22）
 ├── sources/
 │   ├── mod.rs
@@ -1680,8 +1616,7 @@ registry.register(SectionSpec {
 | 不同 model context window 用同一份硬编码上限 | § 3.12 `PromptBudget::for_model(&ModelTarget, &surface)` 派生预算 |
 | `cache_stability` 通过 profile 注入但 LayerResolver 拿不到 | § 3.2.1 提升到 `PromptSurface::SubagentCustom { cache_stability }`；surface 自洽 |
 | `CustomSubagentBody` 不知该渲染哪条 prompt | § 3.6 `BuildCx::custom_subagent_slug` 显式传入 |
-| 引入 flag 时是否 bump schema_version 不明确 | § 3.15 表格化规则：flag 默认 off → 不 bump；默认 on / 默认值切换 → bump |
-| 切换默认 SectionRenderer 让 prefix cache 全失效 | § 3.14 灰度路径：per-model 选择 + thread_id 分桶 + `PROMPT_RENDERER_FORCE` 应急回退；schema_version 强制 bump |
+| 切换默认 SectionRenderer 让 prefix cache 全失效 | § 3.14 per-model 选择 + `PROMPT_RENDERER_FORCE` 应急回退；schema_version 强制 bump |
 | `Composer::render_section_only` 污染主路径 SignalCache | § 3.21 内部用 `BuildCx::for_section_only` 派生独立 SignalCache；不触发 RuntimeMessageInjector |
 | schema_version_monotonic 自动判定不可靠 | § 3.19 三级守门：L1 严格不退步 + L2 改动 hint + L3 PR 模板复选框 |
 | 子代理继承清单散落到各 Source 易漏配 | § 3.22 集中维护 `SUBAGENT_INHERITED_SECTIONS` + `subagent_inheritance_complete` 启动期 lint |

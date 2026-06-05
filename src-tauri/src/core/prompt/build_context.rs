@@ -6,7 +6,6 @@ use crate::core::agent_session::RuntimeModelPlan;
 use crate::core::subagent::SubagentProfile;
 
 use super::clock::Clock;
-use super::feature_set::PromptFeatureSet;
 use super::renderer::SectionRenderer;
 use super::run_mode::RunMode;
 use super::signals::SignalCache;
@@ -26,73 +25,52 @@ pub enum ModelTarget {
     },
 }
 
-impl ModelTarget {
-    pub fn context_window(&self) -> usize {
-        match self {
-            ModelTarget::AnthropicClaude { context_window, .. } => *context_window,
-            ModelTarget::OpenAiCompat { context_window } => *context_window,
-            ModelTarget::Local { context_window } => *context_window,
-        }
-    }
-
-    pub fn supports_cache_control(&self) -> bool {
-        match self {
-            ModelTarget::AnthropicClaude {
-                supports_cache_control,
-                ..
-            } => *supports_cache_control,
-            _ => false,
-        }
-    }
-}
-
-/// Aggregated context passed to every SectionSource::build() call.
-/// This is the single source of truth for all data a source may need.
+/// Build context passed to every SectionSource::build call.
+///
+/// Contains all runtime data needed for prompt construction.
+/// Any field not used by a particular source is simply ignored.
+#[derive(Clone)]
 pub struct BuildCx<'a> {
-    /// SQLite connection pool
+    /// SQLite connection pool for data queries.
     pub pool: &'a SqlitePool,
-    /// Current workspace path
+    /// Absolute path to the current workspace.
     pub workspace_path: &'a str,
-    /// Thread ID (None for non-threaded contexts like title generation)
+    /// Current thread ID, if available.
     pub thread_id: Option<&'a str>,
-    /// Run ID (None if no active run)
+    /// Current run ID, if available.
     pub run_id: Option<&'a str>,
-    /// Runtime model plan (None for surfaces that don't need it)
+    /// The resolved runtime model plan (model + provider info).
     pub raw_plan: Option<&'a RuntimeModelPlan>,
-    /// Current run mode
+    /// Current run mode (Default, Plan, etc.).
     pub run_mode: RunMode,
-    /// Helper profile for subagent surfaces (None for main agent)
+    /// Helper subagent profile, when building a subagent prompt.
     pub helper_profile: Option<&'a SubagentProfile>,
-    /// Custom subagent slug for SubagentBody source
+    /// Custom subagent slug (set for SubagentCustom surfaces).
     pub custom_subagent_slug: Option<&'a str>,
-    /// Override response language for surfaces that don't carry raw_plan
-    /// (Compaction / Title). Falls back to raw_plan.response_language when None.
-    pub response_language: Option<&'a str>,
-    /// Target LLM model info
+    /// Target model info for budget computation.
     pub target_model: ModelTarget,
-    /// Time source (must use this, not Utc::now())
+    /// Clock abstraction for time-sensitive sections.
     pub clock: Arc<dyn Clock>,
-    /// Memoized signal cache for this build
+    /// Signal cache shared across sections in this build.
     pub signals: Arc<SignalCache>,
-    /// Feature flags for A/B experiments
-    pub features: Arc<PromptFeatureSet>,
-    /// Section renderer (Markdown/XML) chosen by caller
+    /// Section renderer to use.
     pub renderer: Arc<dyn SectionRenderer>,
+    /// Response language override, if any.
+    pub response_language: Option<&'a str>,
 }
 
 impl<'a> BuildCx<'a> {
-    /// Create a build context for the main agent surface.
+    /// Create a context for the main agent surface.
     pub fn for_main_agent(
         pool: &'a SqlitePool,
-        raw_plan: Option<&'a RuntimeModelPlan>,
         workspace_path: &'a str,
         thread_id: Option<&'a str>,
         run_id: Option<&'a str>,
+        raw_plan: Option<&'a RuntimeModelPlan>,
         run_mode: RunMode,
-        target_model: ModelTarget,
         clock: Arc<dyn Clock>,
-        features: Arc<PromptFeatureSet>,
         renderer: Arc<dyn SectionRenderer>,
+        response_language: Option<&'a str>,
     ) -> Self {
         Self {
             pool,
@@ -103,59 +81,58 @@ impl<'a> BuildCx<'a> {
             run_mode,
             helper_profile: None,
             custom_subagent_slug: None,
-            response_language: None,
-            target_model,
+            target_model: ModelTarget::AnthropicClaude {
+                context_window: 200_000,
+                supports_cache_control: true,
+            },
             clock,
             signals: Arc::new(SignalCache::new()),
-            features,
             renderer,
+            response_language,
         }
     }
 
-    /// Derive a helper subagent build context from the parent.
-    /// Key differences: new SignalCache (isolation), helper_profile set,
-    /// inherited_run_mode from the surface.
+    /// Derive a child context for a helper subagent, sharing clock and renderer
+    /// but with a fresh SignalCache (subagent builds are independent).
     pub fn derive_for_helper(
-        parent: &BuildCx<'a>,
+        &self,
         helper_profile: &'a SubagentProfile,
-        inherited_run_mode: RunMode,
-        renderer: Arc<dyn SectionRenderer>,
+        custom_subagent_slug: Option<&'a str>,
     ) -> Self {
         Self {
-            pool: parent.pool,
-            workspace_path: parent.workspace_path,
-            thread_id: parent.thread_id,
-            run_id: None, // helper gets its own run_id
-            raw_plan: parent.raw_plan,
-            run_mode: inherited_run_mode,
+            pool: self.pool,
+            workspace_path: self.workspace_path,
+            thread_id: self.thread_id,
+            run_id: self.run_id,
+            raw_plan: self.raw_plan,
+            run_mode: self.run_mode,
             helper_profile: Some(helper_profile),
-            custom_subagent_slug: None,
-            response_language: parent.response_language,
-            target_model: parent.target_model.clone(),
-            clock: parent.clock.clone(),
-            signals: Arc::new(SignalCache::new()), // isolated cache
-            features: parent.features.clone(),
-            renderer,
+            custom_subagent_slug,
+            target_model: self.target_model.clone(),
+            clock: self.clock.clone(),
+            signals: Arc::new(SignalCache::new()),
+            renderer: self.renderer.clone(),
+            response_language: self.response_language,
         }
     }
 
-    /// Create an isolated context for render_section_only().
-    pub fn for_section_only(parent: &BuildCx<'a>) -> Self {
+    /// Create an isolated context for render_section_only, with its own
+    /// SignalCache so it does not pollute the main build path.
+    pub fn for_section_only(&self) -> Self {
         Self {
-            pool: parent.pool,
-            workspace_path: parent.workspace_path,
-            thread_id: parent.thread_id,
-            run_id: parent.run_id,
-            raw_plan: parent.raw_plan,
-            run_mode: parent.run_mode,
-            helper_profile: parent.helper_profile,
-            custom_subagent_slug: parent.custom_subagent_slug,
-            response_language: parent.response_language,
-            target_model: parent.target_model.clone(),
-            clock: parent.clock.clone(),
-            signals: Arc::new(SignalCache::standalone()),
-            features: parent.features.clone(),
-            renderer: parent.renderer.clone(),
+            pool: self.pool,
+            workspace_path: self.workspace_path,
+            thread_id: self.thread_id,
+            run_id: self.run_id,
+            raw_plan: self.raw_plan,
+            run_mode: self.run_mode,
+            helper_profile: self.helper_profile,
+            custom_subagent_slug: self.custom_subagent_slug,
+            target_model: self.target_model.clone(),
+            clock: self.clock.clone(),
+            signals: Arc::new(SignalCache::new()),
+            renderer: self.renderer.clone(),
+            response_language: self.response_language,
         }
     }
 }

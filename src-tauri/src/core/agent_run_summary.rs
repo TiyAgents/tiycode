@@ -127,7 +127,7 @@ async fn build_compaction_system_prompt(
     response_language: Option<&str>,
 ) -> String {
     use crate::core::prompt::{
-        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptFeatureSet,
+        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor,
         PromptSurface, RunMode, SectionId, SignalCache, SourceExecPolicy, SystemClock,
     };
     use std::sync::Arc;
@@ -157,7 +157,6 @@ async fn build_compaction_system_prompt(
         },
         clock: Arc::new(SystemClock),
         signals: Arc::new(SignalCache::new()),
-        features: Arc::new(PromptFeatureSet::empty()),
         renderer: Arc::new(MarkdownRenderer),
     };
     composer

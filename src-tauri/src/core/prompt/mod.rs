@@ -18,7 +18,6 @@ pub mod clock;
 pub mod composer;
 pub mod error_codes;
 pub mod exec_policy;
-pub mod feature_set;
 pub mod inheritance;
 pub mod layer;
 pub mod legacy_adapter;
@@ -48,7 +47,6 @@ pub use clock::{Clock, FixedClock, SystemClock};
 pub use composer::{ComposedPrompt, Composer};
 pub use error_codes::codes;
 pub use exec_policy::SourceExecPolicy;
-pub use feature_set::PromptFeatureSet;
 pub use layer::{
     LayerResolver, PromptLayer, SectionAnchor, SectionAudit, SectionOrder, SectionWarning,
 };

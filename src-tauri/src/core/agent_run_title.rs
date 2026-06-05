@@ -261,7 +261,7 @@ pub(crate) async fn generate_thread_title(
 /// Build the Title surface system prompt via Composer (Phase 6).
 async fn build_title_system_prompt() -> String {
     use crate::core::prompt::{
-        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptFeatureSet,
+        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor,
         PromptSurface, RunMode, SectionId, SignalCache, SourceExecPolicy, SystemClock,
     };
     use std::sync::Arc;
@@ -290,7 +290,6 @@ async fn build_title_system_prompt() -> String {
         },
         clock: Arc::new(SystemClock),
         signals: Arc::new(SignalCache::new()),
-        features: Arc::new(PromptFeatureSet::empty()),
         renderer: Arc::new(MarkdownRenderer),
     };
     composer

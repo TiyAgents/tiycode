@@ -858,7 +858,7 @@ async fn build_helper_system_prompt(
 ) -> Result<String, AppError> {
     use crate::core::prompt::{
         BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptBudget,
-        PromptFeatureSet, PromptSurface, RunMode, SourceExecPolicy, SystemClock,
+        PromptSurface, RunMode, SourceExecPolicy, SystemClock,
     };
     use std::sync::Arc;
 
@@ -903,7 +903,6 @@ async fn build_helper_system_prompt(
         },
         clock: Arc::new(SystemClock),
         signals: Arc::new(crate::core::prompt::SignalCache::new()),
-        features: Arc::new(PromptFeatureSet::empty()),
         renderer: Arc::new(MarkdownRenderer),
     };
 

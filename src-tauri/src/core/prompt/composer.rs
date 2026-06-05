@@ -12,7 +12,6 @@ use super::build_context::BuildCx;
 use super::cache_marker::{CacheMarker, PromptBlock};
 use super::clock::SystemClock;
 use super::exec_policy::SourceExecPolicy;
-use super::feature_set::PromptFeatureSet;
 use super::layer::{PromptLayer, SectionAudit, SectionWarning};
 use super::redactor::Redactor;
 use super::registry::SectionRegistry;
@@ -281,7 +280,6 @@ impl Composer {
             target_model: model_target,
             clock: Arc::new(SystemClock),
             signals: Arc::new(SignalCache::new()),
-            features: Arc::new(PromptFeatureSet::empty()),
             renderer: Arc::new(MarkdownRenderer),
         };
 
@@ -514,7 +512,6 @@ mod tests {
     use super::super::budget::PromptBudget;
     use super::super::build_context::{BuildCx, ModelTarget};
     use super::super::clock::FixedClock;
-    use super::super::feature_set::PromptFeatureSet;
     use super::super::redactor::NoopRedactor;
     use super::super::renderer::MarkdownRenderer;
     use super::super::run_mode::RunMode;
@@ -704,7 +701,6 @@ mod tests {
                 },
                 renderer: Arc::new(MarkdownRenderer),
                 clock: Arc::new(FixedClock::new(chrono::Utc::now())),
-                features: Arc::new(PromptFeatureSet::default()),
                 signals: Arc::new(SignalCache::standalone()),
             };
             let budget = PromptBudget::default();
@@ -734,7 +730,6 @@ mod tests {
                 },
                 renderer: Arc::new(MarkdownRenderer),
                 clock: Arc::new(FixedClock::new(chrono::Utc::now())),
-                features: Arc::new(PromptFeatureSet::default()),
                 signals: Arc::new(SignalCache::standalone()),
             };
             let budget = PromptBudget::default();
@@ -787,7 +782,6 @@ mod tests {
                 },
                 renderer: Arc::new(MarkdownRenderer),
                 clock: Arc::new(FixedClock::new(t1)),
-                features: Arc::new(PromptFeatureSet::default()),
                 signals: Arc::new(SignalCache::standalone()),
             };
             let budget = PromptBudget::default();
@@ -816,7 +810,6 @@ mod tests {
                 },
                 renderer: Arc::new(MarkdownRenderer),
                 clock: Arc::new(FixedClock::new(t2)),
-                features: Arc::new(PromptFeatureSet::default()),
                 signals: Arc::new(SignalCache::standalone()),
             };
             let budget = PromptBudget::default();
