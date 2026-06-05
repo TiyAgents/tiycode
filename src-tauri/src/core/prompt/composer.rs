@@ -1,26 +1,19 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use sqlx::SqlitePool;
 use tokio::time::timeout;
 
-use crate::core::agent_session::RuntimeModelPlan;
 use crate::model::errors::AppError;
 
 use super::budget::PromptBudget;
 use super::build_context::BuildCx;
 use super::cache_marker::{CacheMarker, PromptBlock};
-use super::clock::SystemClock;
 use super::exec_policy::SourceExecPolicy;
 use super::layer::{PromptLayer, SectionAudit, SectionWarning};
 use super::redactor::Redactor;
 use super::registry::SectionRegistry;
-use super::renderer::{MarkdownRenderer, SectionRenderer};
-use super::run_mode::RunMode;
-use super::section::PromptPhase;
 use super::section_id::SectionId;
 use super::section_source::{SectionBody, SectionOutcome, SectionSpec};
-use super::signals::SignalCache;
 use super::surface::PromptSurface;
 use super::templates::{HeuristicTokenizer, Tokenizer};
 
@@ -249,76 +242,6 @@ impl Composer {
         })
     }
 
-    // ── Legacy-compat: byte-equal to old assembler::build_system_prompt ─
-    pub async fn build_main_agent_legacy_compat(
-        &self,
-        pool: &SqlitePool,
-        raw_plan: &RuntimeModelPlan,
-        workspace_path: &str,
-        run_mode_str: &str,
-        thread_id: Option<&str>,
-    ) -> Result<ComposedPrompt, AppError> {
-        let rm = RunMode::from_str(run_mode_str);
-        let surface = PromptSurface::MainAgent { run_mode: rm };
-        let specs = self.registry.filter_for_surface(&surface);
-
-        let model_target = super::build_context::ModelTarget::AnthropicClaude {
-            context_window: 200_000,
-            supports_cache_control: false,
-        };
-
-        let cx = BuildCx {
-            pool,
-            workspace_path,
-            thread_id,
-            run_id: None,
-            raw_plan: Some(raw_plan),
-            run_mode: rm,
-            helper_profile: None,
-            custom_subagent_slug: None,
-            response_language: None,
-            target_model: model_target,
-            clock: Arc::new(SystemClock),
-            signals: Arc::new(SignalCache::new()),
-            renderer: Arc::new(MarkdownRenderer),
-        };
-
-        let _budget = PromptBudget::default(); // not enforced in legacy compat path
-
-        // Sequential build (matches old behavior)
-        let mut built: Vec<(SectionId, String, String)> = Vec::new(); // (id, body, title)
-        for spec in &specs {
-            match spec.source.build(&cx).await {
-                Ok(SectionOutcome::Produced(body)) if !body.markdown.trim().is_empty() => {
-                    built.push((spec.id.clone(), body.markdown, spec.title.to_string()));
-                }
-                Ok(SectionOutcome::Degraded { body, .. }) if !body.markdown.trim().is_empty() => {
-                    built.push((spec.id.clone(), body.markdown, spec.title.to_string()));
-                }
-                _ => { /* skip — matches old retain(is_empty) */ }
-            }
-        }
-
-        // Sort by legacy (phase, order_in_phase)
-        built.sort_by_key(|(id, _, _)| legacy_phase_order(id));
-
-        // Render with MarkdownRenderer
-        let renderer = MarkdownRenderer;
-        let parts: Vec<String> = built
-            .iter()
-            .map(|(_, body, title)| renderer.render_section(title, body))
-            .collect();
-        let text = parts.join(renderer.layer_separator());
-
-        Ok(ComposedPrompt {
-            text,
-            blocks: Vec::new(),
-            schema_version: self.registry.schema_version(),
-            audit: Vec::new(),
-            warnings: Vec::new(),
-        })
-    }
-
     /// Render a single section's body outside the main build pipeline.
     pub async fn render_section_only(
         &self,
@@ -482,28 +405,6 @@ impl Composer {
                 marker_count += 1;
             }
         }
-    }
-}
-
-// ── Legacy phase ordering (matches old (PromptPhase, order_in_phase)) ────
-fn legacy_phase_order(id: &SectionId) -> (PromptPhase, u16) {
-    match id {
-        SectionId::Role => (PromptPhase::Core, 10),
-        SectionId::BehavioralGuidelines => (PromptPhase::Core, 20),
-        SectionId::FinalResponseStructure => (PromptPhase::Core, 30),
-        SectionId::ShellToolingGuide => (PromptPhase::Capability, 10),
-        SectionId::Skills => (PromptPhase::Capability, 20),
-        SectionId::ProjectContext => (PromptPhase::WorkspacePreference, 10),
-        SectionId::ProfileInstructions => (PromptPhase::WorkspacePreference, 20),
-        SectionId::SystemEnvironment => (PromptPhase::RuntimeContext, 10),
-        SectionId::SandboxPermissions => (PromptPhase::RuntimeContext, 20),
-        SectionId::RunMode => (PromptPhase::RuntimeContext, 30),
-        SectionId::WorkspaceLocation => (PromptPhase::RuntimeContext, 40),
-        SectionId::SubagentOutputContract => (PromptPhase::Core, 35),
-        SectionId::SubagentBody => (PromptPhase::Core, 5),
-        SectionId::ActiveGoal => (PromptPhase::RuntimeContext, 999), // Ephemeral, after everything
-        SectionId::ActivePlan => (PromptPhase::RuntimeContext, 999),
-        _ => (PromptPhase::RuntimeContext, 999),
     }
 }
 

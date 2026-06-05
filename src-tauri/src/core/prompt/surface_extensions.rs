@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use super::budget::PromptBudget;
 use super::renderer::{MarkdownRenderer, SectionRenderer};
-use super::section_id::SectionId;
 use super::surface::{PromptSurface, SurfacePattern};
 
 /// Trait that every PromptSurface variant must implement.

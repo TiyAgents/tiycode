@@ -59,6 +59,19 @@ pub struct BuildCx<'a> {
     pub response_language: Option<&'a str>,
 }
 
+impl ModelTarget {
+    /// Whether this model supports cache_control (only Anthropic models).
+    pub fn supports_cache_control(&self) -> bool {
+        matches!(
+            self,
+            ModelTarget::AnthropicClaude {
+                supports_cache_control: true,
+                ..
+            }
+        )
+    }
+}
+
 impl<'a> BuildCx<'a> {
     /// Create a context for the main agent surface.
     pub fn for_main_agent(

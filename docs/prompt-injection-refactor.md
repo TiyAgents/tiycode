@@ -40,7 +40,6 @@
 | 子代理 surface 携带 `inherited_run_mode` | § 3.2.1 |
 | Compaction 输入预过滤 RuntimeMessage | § 3.7 |
 | Section 标题 v1 不做运行时 i18n | § 3.2.5 |
-| 子代理切换的允许差异白名单 | § 4 阶段 2a |
 | Source 执行模型：超时 / 并发上限 / 背压 / 重入 | § 3.6.1 |
 | Cache marker 全局仲裁（≤ 4 个，跨 system + 消息层） | § 3.7.1 |
 | Surface 扩展点：闭包枚举 + 单点新增 | § 3.16 |
@@ -838,9 +837,7 @@ SectionSpec {
 
 子代理特有的 `SubagentOutputContract`、helper 版 `ShellToolingGuide` 通过 `SurfaceMatcher::Any(vec![SurfacePattern::AnySubagent])` 加入。
 
-`SubagentProfile::system_prompt()` 这种"硬编码巨型字符串"也外置到 `templates/subagent/explore.md`、`templates/subagent/review.md`，由 `SubagentBodySource` 加载。
-
-> **迁移分两步**：因 LLM 对 system prompt 微小变化敏感，子代理切换分 2a / 2b 两步，详见 § 4 阶段 2。
+`SubagentProfile::system_prompt()` 这种"硬编码巨型字符串"也外置到 `templates/subagent/explore.md`、`templates/subagent/review.md`，由 `SubagentBodySource` 加载。子代理继承通过 `SUBAGENT_INHERITED_SECTIONS` 清单 + 启动期 lint 保证不遗漏，详见 § 3.22 与 § 4 阶段 2。
 
 #### 3.8.1 `BuildCx::derive_for_helper` 派生规则
 
@@ -1337,37 +1334,15 @@ pub const SUBAGENT_INHERITED_SECTIONS: &[(SubagentSurfaceKind, &[SectionId])] = 
    - `run_mode = "default"` × 有/无 AGENTS.md × 有/无 Skills × 有/无 Profile × Sandbox 4 种 policy
    - `run_mode = "plan"` 同上
 3. 校验 `ComposedPrompt.schema_version` 与每 Section `version` 被正确写入 audit 表
-4. 切换 `agent_session::build_system_prompt` 调用到 Composer，保留旧实现一周作为回退方案
+4. 切换 `agent_session::build_system_prompt` 调用到 Composer
 
-### 阶段 2：Surface 化子代理（拆 2a / 2b）
+### 阶段 2：Surface 化子代理
 
-**2a — 双轨观测**：
-
-1. 新增 `SubagentOutputContract`、`ShellToolingGuide(helper)` 等 Section 进入 Registry
-2. 保留 `build_helper_system_prompt` 作为生产路径；同时调用 Composer 生成对照版本，**仅记录 hash + length 差异**到 metrics（`prompt.subagent.hash_match`、`prompt.subagent.diff_bytes`）
-3. 灰度 7 天，观察 hash_match ≥ 99 % 后进入 2b；不达标 → 回查差异、修补 Source、继续观测
-
-**允许的差异白名单**：
-
-hash_match < 100% 时，diff 必须落在以下"已知良性差异"之一才允许进入 2b；其它差异一律阻断切换：
-
-| 良性差异类型 | 示例 | 判定方式 |
-|------------|------|---------|
-| 行尾空白归一化 | `body \n` → `body\n` | diff 在 `re.sub(r' +\n', '\n', x)` 之后归零 |
-| 双换行→三换行（Layer 间分隔） | `\n\n` → `\n\n\n` | diff 在 `re.sub(r'\n{2,}', '\n\n', x)` 之后归零 |
-| Section 顺序变化但内容完全一致 | A,B,C → A,C,B | 按 `## ` 切分后 sort + join 之后归零 |
-| 标题大小写归一化 | `Sandbox & permissions` → `Sandbox & Permissions` | case-insensitive diff 归零 |
-
-任何**正文字面**差异（即使一字之差）必须**显式批准**——PR 中标注"接受此 diff"才能合入；否则视为破坏继承语义。
-
-观测期产出脚本 `tools/prompt_diff_classifier.py` 自动分类 diff，输出"良性 / 待审 / 破坏性"三类计数到 dashboard。
-
-**2b — 切换**：
-
-1. `SubagentProfile::system_prompt` 改为通过 `Composer::build(SubagentExplore, …)` 渲染
-2. **删除** `orchestrator.rs::collect_prompt_sections` + `inherited_helper_prompt_sections` + `is_helper_inherited_section`（字符串解析反模式）
-3. 子代理快照测试改为对比 Composer 输出
-4. CustomSubagent 切换最后进行：profile 配置文件迁移加 `cache_stability` 字段
+1. 新增 `SubagentOutputContract`、`SubagentBody` 等 Section 进入 Registry，子代理 `SurfaceMatcher` 通过 `SUBAGENT_INHERITED_SECTIONS` 集中维护
+2. `build_helper_system_prompt` 改为通过 `Composer::build(SubagentExplore/Review/Custom, …)` 渲染
+3. **删除** `orchestrator.rs::collect_prompt_sections` + `inherited_helper_prompt_sections` + `is_helper_inherited_section`（字符串解析反模式）
+4. `SubagentProfile::system_prompt()` 硬编码字符串外置到 `templates/subagent/{explore,review}.md`，由 `SubagentBodySource` 加载
+5. CustomSubagent 切换最后进行：profile 配置文件迁移加 `cache_stability` 字段
 
 ### 阶段 3：缓存边界与日期外移
 
@@ -1401,7 +1376,6 @@ hash_match < 100% 时，diff 必须落在以下"已知良性差异"之一才允�
 3. 上线核心告警阈值：
    - `prompt.budget.evicted_ratio > 0.5%` → P2
    - `prompt.budget.truncated_ratio > 1%` → P2
-   - `prompt.subagent.hash_match < 99%`（双轨期）→ P1
    - `prompt.cache_purity_violations > 0`（CI 拦截）→ P0
    - `prompt.source.timeout{…} > 0.1%` → P2（§ 3.6.1 单 Source 超时）
    - `prompt.cache_marker.over_request > 0` → P2（§ 3.7.1 消息层超额申请）
@@ -1573,8 +1547,6 @@ registry.register(SectionSpec {
 | Cache marker 配额 | `cargo test prompt::cache_marker_quota` | 极端场景下总 marker ≤ 4 且 system 优先满足 |
 | Source 幂等 / 可重放 | `cargo test prompt::source_{idempotency,determinism}` | 同 cx 多次调用结果等价；deterministic clock + sealed env 下输出稳定 |
 | 快照 | `insta` 或自研 `.snap` | 每个 Surface × 关键 fixture 的完整渲染；任何文案变更都触发 diff |
-| 兼容（阶段 1） | byte-equal 双轨对比 | 旧 `build_system_prompt` ↔ 新 `Composer::build_main_agent_legacy_compat` |
-| 兼容（阶段 2a） | hash 观测指标 | 子代理新旧 prompt 的 hash_match ≥ 99 % 才进入 2b |
 | 子代理 | 现有 `helper_system_prompt_*` 测试改写 | 验证不再依赖父 prompt 字符串解析 |
 | 性能 | `criterion` | 单次 build 总耗时 < 5 ms（命中 SignalCache 时） |
 | 预算 | 单测 + fuzzing | 制造 100 KB Skills 输出 → 验证 truncate 后总长 ≤ budget；驱逐顺序符合 `eviction_order` |
@@ -1585,9 +1557,9 @@ registry.register(SectionSpec {
 
 | 风险 | 缓解 |
 |---|---|
-| 文案语义在迁移过程中出现微小漂移 | 阶段 1 强制主代理 byte-equal；阶段 2a 强制子代理 hash 观测 ≥ 7 天；任何 diff 必须显式批准 |
+| 文案语义在迁移过程中出现微小漂移 | 阶段 1 强制主代理 byte-equal；子代理通过 `SUBAGENT_INHERITED_SECTIONS` lint 守底 |
 | Layer 划分错误导致缓存命中率下降 | `cache_purity` 测试 + 上线灰度 5% → 50% → 100%；监控 prompt 字节哈希集合大小 |
-| 子代理继承遗漏导致行为退化 | 子代理 `.snap` 全量比对 + 2a 双轨观测；首批仅切换 `SubagentExplore`，验证一周再切 `Review` / `Custom` |
+| 子代理继承遗漏导致行为退化 | 子代理 `.snap` 全量比对 + `subagent_inheritance_complete` lint；首批仅切换 `SubagentExplore`，验证一周再切 `Review` / `Custom` |
 | 软失败掩盖真问题 | `tracing::warn!` + 计数器；超阈值告警 |
 | 模板加载错误（路径错） | `include_str!` 编译期失败，零运行时风险；dev 模式热重载失败回退到编译期常量 |
 | 模板缺占位符 | 严格模式 → `SoftFailed`，绝不静默拼接；启动期 lint 测试拦截 |
@@ -1641,7 +1613,7 @@ registry.register(SectionSpec {
 | 缓存契约 | 无 | `PromptBlock + CacheMarker`，与 Anthropic / Bedrock API 对齐 |
 | 可观测 | 无 | `SectionAudit`（含 version / truncated）+ tracing + Redactor 脱敏 + 告警阈值 |
 | 多 Surface 公用原语 | summary / title / subagent 各写各的"响应语言/风格" | 同一 `ProfileInstructionsSource` 在所有 Surface 复用；`LayerResolver::PerSurface` 处理跨 Surface 缓存语义差异 |
-| 测试覆盖 | 2 个零碎单测 | 每个 Source 四态单测 + 全 Surface 快照 + 兼容双轨 + 缓存纯净性 + 模板 lint + 预算 fuzz + 超时/并发 + 幂等/可重放 + Surface 完整性 + Schema 守护 |
+| 测试覆盖 | 2 个零碎单测 | 每个 Source 四态单测 + 全 Surface 快照 + 缓存纯净性 + 模板 lint + 预算 fuzz + 超时/并发 + 幂等/可重放 + Surface 完整性 + Schema 守护 |
 | 事故复盘 | 无版本信息 | `schema_version` + 每 Section `version`（与模板 front-matter 强绑定）写 `agent_runs`，bump 规则在 § 3.19 显式化 |
 | 执行模型 | 无并发/超时控制 | § 3.6.1 per-source 250 ms 超时 + 同 Layer 并发上限 + overall build 超时；§ 3.18 强制只读/幂等/可重放 |
 | Cache marker 仲裁 | 由各路径自行打标，易超 4 个上限 | § 3.7.1 `CacheMarkerArbiter` 请求级单例统一配额（默认 system 2 / 消息层 2，可动态再分配） |
