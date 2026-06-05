@@ -1,9 +1,14 @@
 // Legacy modules (kept for backward compat during migration)
 pub mod active_goal_source;
+pub mod active_plan_source;
 pub mod assembler;
+pub mod compaction_contract_source;
 pub mod context;
 pub mod providers;
 pub mod section;
+pub mod skills_source;
+pub mod subagent_output_contract_source;
+pub mod title_contract_source;
 
 // New modules (Phase 0+)
 pub mod budget;
@@ -58,7 +63,8 @@ pub use runtime_message::{
 };
 pub use section_id::SectionId;
 pub use section_source::{
-    FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource, SectionSpec,
+    FatalError, SectionBody, SectionCriticality, SectionMeta, SectionOutcome, SectionSource,
+    SectionSpec,
 };
 pub use signals::{BuildSignal, SignalCache, SignalKey};
 pub use surface::{

@@ -1,20 +1,22 @@
 use std::borrow::Cow;
 
 use super::active_goal_source::ActiveGoalSource;
+use super::active_plan_source::ActivePlanSource;
+use super::compaction_contract_source::CompactionContractSource;
 use super::layer::{LayerResolver, PromptLayer, SectionAnchor, SectionOrder};
-use super::legacy_adapter::{
-    LegacyCompactionContractSource, LegacyProfileInstructionsSource, LegacySkillsSource,
-    LegacySubagentOutputContractSource, LegacyTitleContractSource, SubagentBodySource,
-};
-use super::providers::{ProfileProvider, SkillsProvider};
+use super::legacy_adapter::{LegacyProfileInstructionsSource, SubagentBodySource};
+use super::providers::ProfileProvider;
 use super::section_id::SectionId;
-use super::section_source::SectionSpec;
+use super::section_source::{SectionCriticality, SectionSpec};
+use super::skills_source::SkillsSource;
+use super::subagent_output_contract_source::SubagentOutputContractSource;
 use super::surface::{PromptSurface, SurfaceMatcher, SurfacePattern};
 use super::template_sources::{
     ProjectContextSource, RunModeSource, SandboxPermissionsSource, SystemEnvironmentSource,
     WorkspaceLocationSource,
 };
 use super::templates::{TemplateSource, TemplateVars};
+use super::title_contract_source::TitleContractSource;
 
 /// PerSurface layer resolver for ProfileInstructions:
 /// MainAgent / Subagent → SessionStable
@@ -73,7 +75,7 @@ impl SectionRegistry {
 /// Byte-equal layer mapping: Core→StablePrefix, Capability+WorkspacePreference→SessionStable,
 /// RuntimeContext→RuntimeOverlay. This preserves the old (phase, order_in_phase) ordering.
 pub fn default_registry() -> SectionRegistry {
-    let mut registry = SectionRegistry::new(2);
+    let mut registry = SectionRegistry::new(3);
 
     // ── StablePrefix (was Core) ──────────────────────────────────────
     registry.register(SectionSpec {
@@ -87,6 +89,7 @@ pub fn default_registry() -> SectionRegistry {
         ]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::Critical,
         source: Box::new(TemplateSource::new(
             "role.md",
             include_str!("templates/role.md"),
@@ -106,6 +109,7 @@ pub fn default_registry() -> SectionRegistry {
         // Cap at 20 KB to leave headroom for future additions while still
         // bounding worst-case growth.
         max_chars: Some(20_000),
+        criticality: SectionCriticality::Critical,
         source: Box::new(TemplateSource::new(
             "behavioral_guidelines.md",
             include_str!("templates/behavioral_guidelines.md"),
@@ -122,6 +126,7 @@ pub fn default_registry() -> SectionRegistry {
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyMainAgent]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::Critical,
         source: Box::new(TemplateSource::new(
             "final_response_structure.md",
             include_str!("templates/final_response_structure.md"),
@@ -149,6 +154,7 @@ pub fn default_registry() -> SectionRegistry {
         ]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::Critical,
         source: Box::new(TemplateSource::new(
             "shell_tooling_guide.md",
             include_str!("templates/shell_tooling_guide.md"),
@@ -172,7 +178,8 @@ pub fn default_registry() -> SectionRegistry {
         // Without an explicit cap the per_section_default_chars (6 KB) would
         // truncate the trailing "How to use skills" guidance.
         max_chars: Some(40_000),
-        source: Box::new(LegacySkillsSource(SkillsProvider)),
+        criticality: SectionCriticality::NonCritical,
+        source: Box::new(SkillsSource),
     });
 
     registry.register(SectionSpec {
@@ -186,6 +193,7 @@ pub fn default_registry() -> SectionRegistry {
         ]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::NonCritical,
         source: Box::new(ProjectContextSource),
     });
 
@@ -202,6 +210,7 @@ pub fn default_registry() -> SectionRegistry {
         ]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::Critical,
         source: Box::new(LegacyProfileInstructionsSource(ProfileProvider)),
     });
 
@@ -217,6 +226,7 @@ pub fn default_registry() -> SectionRegistry {
         ]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::Critical,
         source: Box::new(SystemEnvironmentSource),
     });
 
@@ -228,6 +238,7 @@ pub fn default_registry() -> SectionRegistry {
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyMainAgent]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::Critical,
         source: Box::new(SandboxPermissionsSource),
     });
 
@@ -239,6 +250,7 @@ pub fn default_registry() -> SectionRegistry {
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyMainAgent]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::Critical,
         source: Box::new(RunModeSource),
     });
 
@@ -253,6 +265,7 @@ pub fn default_registry() -> SectionRegistry {
         ]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::Critical,
         source: Box::new(WorkspaceLocationSource),
     });
 
@@ -265,7 +278,8 @@ pub fn default_registry() -> SectionRegistry {
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnySubagent]),
         version: 1,
         max_chars: None,
-        source: Box::new(LegacySubagentOutputContractSource),
+        criticality: SectionCriticality::Critical,
+        source: Box::new(SubagentOutputContractSource),
     });
 
     registry.register(SectionSpec {
@@ -278,6 +292,7 @@ pub fn default_registry() -> SectionRegistry {
         // Custom subagent prompts can be arbitrarily long; 50 KB leaves
         // generous headroom while still bounding worst-case system prompt size.
         max_chars: Some(50_000),
+        criticality: SectionCriticality::Critical,
         source: Box::new(SubagentBodySource),
     });
 
@@ -290,7 +305,20 @@ pub fn default_registry() -> SectionRegistry {
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyMainAgent]),
         version: 1,
         max_chars: None,
+        criticality: SectionCriticality::NonCritical,
         source: Box::new(ActiveGoalSource),
+    });
+
+    registry.register(SectionSpec {
+        id: SectionId::ActivePlan,
+        title: Cow::Borrowed("Active Plan"),
+        layer: LayerResolver::Fixed(PromptLayer::Ephemeral),
+        order_hint: SectionOrder::Anchored(SectionAnchor::After(SectionId::ActiveGoal)),
+        surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyMainAgent]),
+        version: 1,
+        max_chars: None,
+        criticality: SectionCriticality::NonCritical,
+        source: Box::new(ActivePlanSource),
     });
 
     // ── Compaction + Title sections ──────────────────────────────────
@@ -302,7 +330,8 @@ pub fn default_registry() -> SectionRegistry {
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyCompaction]),
         version: 1,
         max_chars: None,
-        source: Box::new(LegacyCompactionContractSource),
+        criticality: SectionCriticality::NonCritical,
+        source: Box::new(CompactionContractSource),
     });
 
     registry.register(SectionSpec {
@@ -313,7 +342,8 @@ pub fn default_registry() -> SectionRegistry {
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::Title]),
         version: 1,
         max_chars: None,
-        source: Box::new(LegacyTitleContractSource),
+        criticality: SectionCriticality::NonCritical,
+        source: Box::new(TitleContractSource),
     });
 
     registry
@@ -328,10 +358,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_has_all_16_sections() {
+    fn registry_has_all_17_sections() {
         let reg = default_registry();
-        assert_eq!(reg.sections.len(), 16);
-        assert_eq!(reg.schema_version(), 2);
+        assert_eq!(reg.sections.len(), 17);
+        assert_eq!(reg.schema_version(), 3);
     }
 
     #[test]
@@ -345,6 +375,7 @@ mod tests {
             surfaces: SurfaceMatcher::All,
             version: 1,
             max_chars: None,
+            criticality: SectionCriticality::NonCritical,
             source: Box::new(DummySource),
         });
         assert_eq!(reg.iter().count(), 1);
@@ -497,7 +528,7 @@ mod tests {
         // L1 hard-floor: schema_version must never go below the recorded baseline.
         // Bump BASELINE_SCHEMA_VERSION every time you bump default_registry().schema_version
         // per the rules in docs/prompt-injection-refactor.md § 3.19.
-        const BASELINE_SCHEMA_VERSION: u32 = 2;
+        const BASELINE_SCHEMA_VERSION: u32 = 3;
 
         let reg = default_registry();
         assert!(

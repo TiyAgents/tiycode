@@ -207,11 +207,17 @@ impl Composer {
             });
         }
 
-        // Step 5: Sort by (Layer, SectionOrder, SectionId)
+        // Step 5: Sort by (Layer, then resolved anchored order, then SectionId)
         bodies.sort_by(|(a_spec, a_layer, ..), (b_spec, b_layer, ..)| {
-            a_layer
-                .cmp(b_layer)
-                .then_with(|| a_spec.order_hint.cmp(&b_spec.order_hint))
+            let layer_cmp = a_layer.cmp(b_layer);
+            if layer_cmp != std::cmp::Ordering::Equal {
+                return layer_cmp;
+            }
+            // Within same layer, resolve Anchored positions
+            let a_order = Self::resolve_anchored_order(a_spec, &specs);
+            let b_order = Self::resolve_anchored_order(b_spec, &specs);
+            a_order
+                .cmp(&b_order)
                 .then_with(|| a_spec.id.cmp(&b_spec.id))
         });
 
@@ -400,6 +406,35 @@ impl Composer {
 
     // ── Private helpers ───────────────────────────────────────────────
 
+    /// Resolve the order of a section within its layer, handling Anchored positions.
+    /// Returns (base_order, anchor_target_order) for topological comparison.
+    fn resolve_anchored_order(spec: &SectionSpec, all_specs: &[&SectionSpec]) -> u32 {
+        use super::layer::SectionOrder;
+
+        match &spec.order_hint {
+            SectionOrder::First => 0,
+            SectionOrder::Last => u32::MAX,
+            SectionOrder::Default => 50_000,
+            SectionOrder::Anchored(anchor) => {
+                // Find the anchor target and compute relative position
+                let target_id = match anchor {
+                    super::layer::SectionAnchor::Before(id)
+                    | super::layer::SectionAnchor::After(id) => id,
+                };
+                // Find the anchor target's position within the same layer
+                let target_spec = all_specs.iter().find(|s| &s.id == target_id);
+                let target_order = match target_spec {
+                    Some(ts) => Self::resolve_anchored_order(ts, all_specs),
+                    None => 50_000, // Anchor missing; fall to default position
+                };
+                match anchor {
+                    super::layer::SectionAnchor::Before(_) => target_order.saturating_sub(1),
+                    super::layer::SectionAnchor::After(_) => target_order.saturating_add(1),
+                }
+            }
+        }
+    }
+
     fn apply_per_section_budget(
         &self,
         spec: &SectionSpec,
@@ -539,8 +574,17 @@ fn legacy_phase_order(id: &SectionId) -> (PromptPhase, u16) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::build_context::ModelTarget;
+    use super::super::budget::PromptBudget;
+    use super::super::build_context::{BuildCx, ModelTarget};
+    use super::super::clock::FixedClock;
+    use super::super::feature_set::PromptFeatureSet;
+    use super::super::redactor::NoopRedactor;
+    use super::super::renderer::MarkdownRenderer;
+    use super::super::run_mode::RunMode;
+    use super::super::signals::SignalCache;
+    use super::super::surface::PromptSurface;
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn cache_purity_stable_prefix_omits_dates_and_ids() {
@@ -631,5 +675,225 @@ mod tests {
         }];
         Composer::assign_cache_markers(&mut blocks, &target);
         assert!(blocks[0].cache_marker.is_none());
+    }
+
+    // ── § 3.7.1 cache_marker_quota: total markers must never exceed 4 ──
+
+    #[test]
+    fn cache_marker_quota_never_exceeds_four() {
+        let target = ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: true,
+        };
+        // 6 blocks, all eligible for markers (long enough + non-Ephemeral layer)
+        let long_text = "x".repeat(2048);
+        let mut blocks: Vec<PromptBlock> = vec![
+            PromptLayer::StablePrefix,
+            PromptLayer::SessionStable,
+            PromptLayer::SessionStable,
+            PromptLayer::RuntimeOverlay,
+            PromptLayer::RuntimeOverlay,
+            PromptLayer::StablePrefix,
+        ]
+        .into_iter()
+        .map(|layer| PromptBlock {
+            layer,
+            text: long_text.clone(),
+            cache_marker: None,
+        })
+        .collect();
+
+        Composer::assign_cache_markers(&mut blocks, &target);
+        let marker_count = blocks.iter().filter(|b| b.cache_marker.is_some()).count();
+        assert!(
+            marker_count <= 4,
+            "cache markers ({marker_count}) exceed maximum 4 — violates § 3.7.1"
+        );
+        // At least one marker should be assigned (StablePrefix has long enough text)
+        assert!(marker_count >= 1, "expected at least one cache marker");
+    }
+
+    #[test]
+    fn cache_marker_quota_skips_evicted_layer() {
+        let target = ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: true,
+        };
+        // StablePrefix block is too short to earn a marker (< 1024 chars)
+        let mut blocks = vec![PromptBlock {
+            layer: PromptLayer::StablePrefix,
+            text: "short".to_string(),
+            cache_marker: None,
+        }];
+        Composer::assign_cache_markers(&mut blocks, &target);
+        assert!(
+            blocks[0].cache_marker.is_none(),
+            "short StablePrefix should not get a marker — violates layer sliding rule"
+        );
+    }
+
+    // ── § 3.18 source_idempotency: same BuildCx → equivalent output ──
+
+    #[tokio::test]
+    async fn source_idempotency_deterministic_template_source() {
+        // Template sources with no dynamic data must produce identical output
+        // on repeated calls with the same BuildCx.
+        let registry = Arc::new(crate::core::prompt::registry::default_registry());
+        let composer = Composer::new(
+            registry,
+            SourceExecPolicy::default(),
+            Arc::new(NoopRedactor),
+        );
+        // Use Title surface as a simple deterministic case
+        let surface = PromptSurface::Title;
+
+        // First build
+        let result1 = {
+            let placeholder_pool =
+                sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("placeholder pool");
+            let cx = BuildCx {
+                pool: &placeholder_pool,
+                workspace_path: "/tmp/test",
+                thread_id: None,
+                run_id: None,
+                raw_plan: None,
+                run_mode: RunMode::Default,
+                helper_profile: None,
+                response_language: None,
+                custom_subagent_slug: None,
+                target_model: ModelTarget::AnthropicClaude {
+                    context_window: 200_000,
+                    supports_cache_control: true,
+                },
+                renderer: Arc::new(MarkdownRenderer),
+                clock: Arc::new(FixedClock::new(chrono::Utc::now())),
+                features: Arc::new(PromptFeatureSet::default()),
+                signals: Arc::new(SignalCache::standalone()),
+            };
+            let budget = PromptBudget::default();
+            composer
+                .build(&surface, &cx, &budget)
+                .await
+                .expect("build should succeed")
+        };
+
+        // Second build with identical parameters
+        let result2 = {
+            let placeholder_pool =
+                sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("placeholder pool");
+            let cx = BuildCx {
+                pool: &placeholder_pool,
+                workspace_path: "/tmp/test",
+                thread_id: None,
+                run_id: None,
+                raw_plan: None,
+                run_mode: RunMode::Default,
+                helper_profile: None,
+                response_language: None,
+                custom_subagent_slug: None,
+                target_model: ModelTarget::AnthropicClaude {
+                    context_window: 200_000,
+                    supports_cache_control: true,
+                },
+                renderer: Arc::new(MarkdownRenderer),
+                clock: Arc::new(FixedClock::new(chrono::Utc::now())),
+                features: Arc::new(PromptFeatureSet::default()),
+                signals: Arc::new(SignalCache::standalone()),
+            };
+            let budget = PromptBudget::default();
+            composer
+                .build(&surface, &cx, &budget)
+                .await
+                .expect("build should succeed")
+        };
+
+        assert_eq!(
+            result1.text, result2.text,
+            "same BuildCx must produce byte-equal output — violates § 3.18 idempotency"
+        );
+    }
+
+    // ── § 3.18 source_determinism: no SystemTime::now() side effects ──
+
+    #[tokio::test]
+    async fn source_determinism_fixed_clock_produces_stable_output() {
+        let registry = Arc::new(crate::core::prompt::registry::default_registry());
+        let composer = Composer::new(
+            registry,
+            SourceExecPolicy::default(),
+            Arc::new(NoopRedactor),
+        );
+        let surface = PromptSurface::MainAgent {
+            run_mode: RunMode::Default,
+        };
+
+        // Fixed clock at two different points in time
+        let t1 = chrono::Utc::now();
+        let t2 = t1 + chrono::Duration::days(30);
+
+        let result1 = {
+            let placeholder_pool =
+                sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("placeholder pool");
+            let cx = BuildCx {
+                pool: &placeholder_pool,
+                workspace_path: "/tmp/test",
+                thread_id: None,
+                run_id: None,
+                raw_plan: None,
+                run_mode: RunMode::Default,
+                helper_profile: None,
+                response_language: None,
+                custom_subagent_slug: None,
+                target_model: ModelTarget::AnthropicClaude {
+                    context_window: 200_000,
+                    supports_cache_control: true,
+                },
+                renderer: Arc::new(MarkdownRenderer),
+                clock: Arc::new(FixedClock::new(t1)),
+                features: Arc::new(PromptFeatureSet::default()),
+                signals: Arc::new(SignalCache::standalone()),
+            };
+            let budget = PromptBudget::default();
+            composer
+                .build(&surface, &cx, &budget)
+                .await
+                .expect("build should succeed")
+        };
+
+        let result2 = {
+            let placeholder_pool =
+                sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("placeholder pool");
+            let cx = BuildCx {
+                pool: &placeholder_pool,
+                workspace_path: "/tmp/test",
+                thread_id: None,
+                run_id: None,
+                raw_plan: None,
+                run_mode: RunMode::Default,
+                helper_profile: None,
+                response_language: None,
+                custom_subagent_slug: None,
+                target_model: ModelTarget::AnthropicClaude {
+                    context_window: 200_000,
+                    supports_cache_control: true,
+                },
+                renderer: Arc::new(MarkdownRenderer),
+                clock: Arc::new(FixedClock::new(t2)),
+                features: Arc::new(PromptFeatureSet::default()),
+                signals: Arc::new(SignalCache::standalone()),
+            };
+            let budget = PromptBudget::default();
+            composer
+                .build(&surface, &cx, &budget)
+                .await
+                .expect("build should succeed")
+        };
+
+        // With fixed clock, system prompt should be identical regardless of time
+        // (current_date is in runtime_message, not system prompt)
+        assert_eq!(
+            result1.text, result2.text,
+            "fixed clock must produce byte-equal output — violates § 3.18 determinism"
+        );
     }
 }

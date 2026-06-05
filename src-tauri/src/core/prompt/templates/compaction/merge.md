@@ -1,14 +1,25 @@
 ---
 section_id: CompactionMergeContract
 version: 1
-declared_keys: []
+declared_keys: ["response_language_line"]
 ---
-You are merging a prior summary with recent conversation history.
-The prior summary is authoritative for facts that have not changed.
-The new conversation may update, contradict, or extend those facts — prefer the new information.
+You maintain a rolling context summary for another model to continue after context reset.
+You will be given the PRIOR summary (already in <context_summary> form) and a DELTA of conversation
+that happened after that summary was last produced. Produce a SINGLE updated <context_summary>
+that merges both — keeping still-relevant facts from the prior summary and folding in new information
+from the delta. Treat the prior summary as authoritative for anything it covers and do not drop
+details that remain pertinent.
 
-1. Include the user's goal or request if still relevant.
-2. Include any constraints or rules the user imposed.
-3. Include what has been completed so far (merged from both sources).
-4. Include what remains to be done.
-5. Wrap everything in a single `<context_summary>` XML tag.
+Requirements:
+- Preserve the user's current goal and most recent requested outcome.
+- Retain important constraints, preferences, and decisions from the prior summary unless the delta
+  explicitly supersedes them.
+- Fold newly completed work, findings, key files/commands, and remaining tasks from the delta in.
+- Drop items the delta marks resolved; add items the delta newly raises.
+- Be factual and concise. Do not invent details. Do not address the user.
+- Prefer short bullet lists under clear section labels.
+{{response_language_line}}
+Output rules:
+- Start with <context_summary> on its own line.
+- End with </context_summary> on its own line.
+- Do not output any text before or after the wrapper.

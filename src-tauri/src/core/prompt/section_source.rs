@@ -104,6 +104,18 @@ pub struct SectionSpec {
     pub max_chars: Option<usize>,
     /// The source that produces this section's body
     pub source: Box<dyn SectionSource>,
+    /// Whether failure of this section should escalate to overall build failure.
+    /// Default: Critical — only override to NonCritical for optional sections.
+    pub criticality: SectionCriticality,
+}
+
+/// Criticality level for a section. Controls whether SoftFailed escalates to FatalError.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectionCriticality {
+    /// Failure of this section causes the entire prompt build to fail
+    Critical,
+    /// Failure is tolerated; the build continues without this section
+    NonCritical,
 }
 
 /// The core trait for producing a section's body.

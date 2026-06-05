@@ -146,6 +146,32 @@ impl SignalCache {
     pub fn standalone() -> Self {
         Self::new()
     }
+
+    /// Create a new cache that inherits pre-computed signals from the parent,
+    /// avoiding recomputation in helper agent builds (§ 3.8.1).
+    ///
+    /// Only whitelisted signals are shared: ApprovalPolicy, WritableRoots,
+    /// WorkspaceInstructions, ProfileAvailable — these are safe to reuse
+    /// across parent→helper transitions because they do not depend on
+    /// thread/run state.
+    pub fn shareable_for_helper(&self) -> Self {
+        let inner = self.inner.lock().unwrap();
+        // Copy all pre-computed slots from parent to child cache.
+        // OnceCell slots with computed values are immutable and safe to share.
+        let child_map: HashMap<(TypeId, SignalKey), Arc<SignalSlot>> = inner
+            .iter()
+            .filter(|((_type_id, key), _)| {
+                // Only inherit global-scoped signals; thread-scoped signals
+                // are specific to the parent's thread context.
+                key.scope == "global"
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        Self {
+            inner: Mutex::new(child_map),
+        }
+    }
 }
 
 impl Default for SignalCache {

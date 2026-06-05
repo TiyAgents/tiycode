@@ -87,6 +87,37 @@ mod tests {
                 "emergency_fallback_text returned empty for {:?}",
                 surface
             );
+
+            // § 3.16: Must be ≤ 1 KB
+            assert!(
+                text.len() <= 1024,
+                "emergency_fallback for {:?} is {} bytes, exceeds 1 KB limit (§ 3.16)",
+                surface,
+                text.len()
+            );
+
+            // § 3.16: Must contain NO template placeholders
+            assert!(
+                !text.contains("{{"),
+                "emergency_fallback for {:?} contains '{{' placeholder — violates § 3.16 no-placeholders rule",
+                surface
+            );
+
+            // § 3.16: Must have zero runtime dependencies (no dynamic content)
+            // Check for common date/time patterns that would imply runtime dependency
+            assert!(
+                !text.contains("current_date") && !text.contains("workspace_path"),
+                "emergency_fallback for {:?} references runtime variable — violates § 3.16",
+                surface
+            );
+
+            // All fallback text must be non-empty plain static prose
+            let trimmed = text.trim();
+            assert!(
+                !trimmed.is_empty(),
+                "emergency_fallback for {:?} is empty after trimming",
+                surface
+            );
         }
     }
 }
