@@ -79,8 +79,6 @@ pub enum SectionWarning {
         code: &'static str,
         detail: String,
     },
-    /// Emergency fallback was injected because all sections failed/skipped
-    EmergencyFallback,
 }
 
 /// Audit trail for a single section in a composed prompt.
@@ -93,7 +91,6 @@ pub struct SectionAudit {
     pub estimated_tokens: usize,
     pub source_kind: &'static str,
     pub elapsed: std::time::Duration,
-    pub fallback_used: bool,
     pub truncated: bool,
     /// Template version from front-matter (if template-backed)
     pub template_version: Option<u32>,

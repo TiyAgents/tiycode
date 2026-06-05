@@ -12,9 +12,6 @@ pub trait SurfaceExtension {
     /// The SurfacePattern that matches this surface.
     fn pattern(&self) -> SurfacePattern;
 
-    /// Critical sections for this surface (soft-fail escalates to FatalError).
-    fn critical_sections(&self) -> &'static [SectionId];
-
     /// Default prompt budget for this surface.
     fn default_budget(&self) -> PromptBudget;
 
@@ -35,10 +32,6 @@ impl SurfaceExtension for PromptSurface {
             PromptSurface::Compaction { kind } => SurfacePattern::Compaction(*kind),
             PromptSurface::Title => SurfacePattern::Title,
         }
-    }
-
-    fn critical_sections(&self) -> &'static [SectionId] {
-        super::emergency_fallback::critical_sections(self)
     }
 
     fn default_budget(&self) -> PromptBudget {
@@ -101,12 +94,6 @@ mod tests {
         for surface in &surfaces {
             // Verify each field is non-empty/valid
             let _pattern = surface.pattern();
-            let critical = surface.critical_sections();
-            assert!(
-                !critical.is_empty(),
-                "Surface {:?} has no critical sections",
-                surface
-            );
             let _budget = surface.default_budget();
             let _renderer = surface.default_renderer();
             // runtime_message_enabled just returns bool

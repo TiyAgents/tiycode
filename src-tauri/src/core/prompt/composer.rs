@@ -5,13 +5,12 @@ use sqlx::SqlitePool;
 use tokio::time::timeout;
 
 use crate::core::agent_session::RuntimeModelPlan;
-use crate::model::errors::{AppError, ErrorSource};
+use crate::model::errors::AppError;
 
 use super::budget::PromptBudget;
 use super::build_context::BuildCx;
 use super::cache_marker::{CacheMarker, PromptBlock};
 use super::clock::SystemClock;
-use super::emergency_fallback::{critical_sections, emergency_fallback_text};
 use super::exec_policy::SourceExecPolicy;
 use super::feature_set::PromptFeatureSet;
 use super::layer::{PromptLayer, SectionAudit, SectionWarning};
@@ -89,7 +88,6 @@ impl Composer {
             SectionOutcome,
             std::time::Duration,
         )> = Vec::new();
-        let mut soft_failed_ids: Vec<SectionId> = Vec::new();
 
         for spec in &specs {
             let layer = spec.layer.resolve(surface);
@@ -121,11 +119,6 @@ impl Composer {
                     }
                 }
             };
-
-            // Track SoftFailed sections for critical-section check
-            if matches!(outcome, SectionOutcome::SoftFailed { .. }) {
-                soft_failed_ids.push(spec.id.clone());
-            }
 
             results.push((spec, layer, outcome, source_start.elapsed()));
 
@@ -163,48 +156,9 @@ impl Composer {
                     bodies.push((spec, layer, body, Some(merged_warning), elapsed));
                 }
                 SectionOutcome::Skip => { /* silently skip */ }
-                SectionOutcome::SoftFailed { .. } => { /* silently skip, tracked in soft_failed_ids */
+                SectionOutcome::SoftFailed { .. } => { /* silently skip */
                 }
             }
-        }
-
-        // EmergencyFallback: if no sections were produced, inject hard-coded fallback
-        let fallback_used = bodies.is_empty();
-        if fallback_used {
-            let fallback_text = emergency_fallback_text(surface);
-            let renderer = cx.renderer.as_ref();
-            let rendered = renderer.render_section("Emergency Fallback", fallback_text);
-            let text = self.redactor.redact(&rendered).into_owned();
-            let estimated = self.tokenizer.estimate(&rendered);
-            tracing::error!(
-                target = "prompt.fallback.emergency",
-                surface = ?surface,
-                "emergency fallback injected"
-            );
-            return Ok(ComposedPrompt {
-                text,
-                blocks: vec![PromptBlock {
-                    layer: PromptLayer::StablePrefix,
-                    text: rendered,
-                    cache_marker: None,
-                }],
-                schema_version: self.registry.schema_version(),
-                audit: vec![SectionAudit {
-                    id: SectionId::Extension("emergency_fallback"),
-                    layer: PromptLayer::StablePrefix,
-                    version: 1,
-                    bytes: fallback_text.len(),
-                    estimated_tokens: estimated,
-                    source_kind: "emergency_fallback",
-                    elapsed: start.elapsed(),
-                    fallback_used: true,
-                    truncated: false,
-                    template_version: None,
-                    renderer: renderer.name(),
-                    tokenizer: self.tokenizer.name(),
-                }],
-                warnings: vec![SectionWarning::EmergencyFallback],
-            });
         }
 
         // Step 5: Sort by (Layer, then resolved anchored order, then SectionId)
@@ -249,7 +203,6 @@ impl Composer {
                 estimated_tokens: self.tokenizer.estimate(&rendered),
                 source_kind: spec.source.source_kind(),
                 elapsed: *source_elapsed,
-                fallback_used: false,
                 truncated: warn
                     .as_ref()
                     .map_or(false, |w| matches!(w, SectionWarning::Truncated { .. })),
@@ -269,26 +222,11 @@ impl Composer {
         // non-empty layers, skipping Ephemeral layer.
         Self::assign_cache_markers(&mut blocks, &cx.target_model);
 
-        // Check if any critical section soft-failed — escalate to FatalError
-        let critical = critical_sections(surface);
-        for cs_id in critical {
-            if soft_failed_ids.contains(cs_id) {
-                return Err(AppError::internal(
-                    ErrorSource::System,
-                    format!(
-                        "critical section {:?} soft-failed; prompt build aborted",
-                        cs_id
-                    ),
-                ));
-            }
-        }
-
         let text = text_parts.join(renderer.layer_separator());
         let text = self.redactor.redact(&text).into_owned();
 
         let total_estimated_tokens: usize = audit.iter().map(|a| a.estimated_tokens).sum();
         let truncated_sections = audit.iter().filter(|a| a.truncated).count();
-        let fallback_sections = audit.iter().filter(|a| a.fallback_used).count();
 
         tracing::info!(
             target = "prompt.compose",
@@ -299,7 +237,6 @@ impl Composer {
             estimated_tokens = total_estimated_tokens,
             warnings = warnings.len(),
             truncated_sections,
-            fallback_sections,
             elapsed_ms = start.elapsed().as_millis() as u64,
             "system prompt composed"
         );

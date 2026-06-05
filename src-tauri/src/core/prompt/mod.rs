@@ -16,7 +16,6 @@ pub mod build_context;
 pub mod cache_marker;
 pub mod clock;
 pub mod composer;
-pub mod emergency_fallback;
 pub mod error_codes;
 pub mod exec_policy;
 pub mod feature_set;

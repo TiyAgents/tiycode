@@ -13,7 +13,7 @@ pub struct SourceExecPolicy {
     /// Default: 8
     pub layer_concurrency: usize,
 
-    /// Hard overall build timeout; exceeded → critical sections missing → EmergencyFallback
+    /// Hard overall build timeout; exceeded → overall build fails
     /// Default: 800 ms
     pub overall_build_timeout: Duration,
 
