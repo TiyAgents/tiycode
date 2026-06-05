@@ -317,7 +317,7 @@ const MarkdownPreview: FC<MarkdownPreviewProps> = ({ content, workspaceId, fileP
   );
 
   return (
-    <div className="h-full overflow-auto bg-app-canvas/70 px-4 py-3 text-app-foreground">
+    <div className="h-full overflow-auto bg-app-canvas/70 px-4 py-3 text-app-foreground select-text">
       <div className="mx-auto max-w-4xl text-sm leading-6">
         <MessageResponse components={components}>{content}</MessageResponse>
       </div>
