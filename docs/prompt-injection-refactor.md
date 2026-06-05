@@ -51,6 +51,18 @@
 | 模板 front-matter `version` 与 Section `version` 绑定 | § 3.20 |
 | `EmergencyFallback` 编译期内联（不依赖运行时模板系统） | § 3.16 |
 | 散落入口归并：含 `build_implementation_handoff_prompt` | § 3.21 |
+| 子代理继承的 Section 默认清单 | § 3.22 |
+| `SignalCache` 循环检测与失败重试（不永久 poison） | § 3.6 |
+| Layer 被预算掏空时 `CacheMarker` 滑动规则 | § 3.7.1 |
+| `PromptBudget::for_model` 按 model context window 计算 | § 3.12 |
+| `CustomSubagent` 的 `cache_stability` 进入 `PromptSurface`（非 profile） | § 3.2.1 |
+| `BuildCx` 完整字段（含 `custom_subagent_slug` / `target_model` / `clock`） | § 3.6 |
+| `EmergencyFallback` per-Surface 文本 | § 3.16 |
+| `PromptFeatureSet` 与 `schema_version` 的 bump 关系 | § 3.15 |
+| `SectionRenderer` 灰度切换路径（与 schema_version 协同） | § 3.14 |
+| `Composer::render_section_only` 隔离 BuildCx | § 3.21 |
+| `schema_version_monotonic` 测试的工程化降级实现 | § 3.19 |
+| `Composer` 入口签名：registry 在构造时注入，`build` 不传 | § 3.3 / § 6 |
 
 ---
 
@@ -221,12 +233,31 @@ pub enum PromptSurface {
     SubagentExplore { inherited_run_mode: RunMode },
     /// 内置 review helper
     SubagentReview { inherited_run_mode: RunMode },
-    /// 用户自定义子代理（使用 slug 标识）
-    SubagentCustom { slug: String, inherited_run_mode: RunMode },
+    /// 用户自定义子代理
+    SubagentCustom {
+        slug: String,
+        inherited_run_mode: RunMode,
+        /// 用户在 profile YAML 中显式声明该 prompt 不含瞬态内容（日期 / 冲刺名 / PR ID 等）
+        /// 时设为 true，Composer 会把 `CustomSubagentBody` 提升至 StablePrefix Layer。
+        /// 默认 false（SessionStable）。
+        ///
+        /// 字段进入 PromptSurface（而非 profile 单独传入），是为了让 LayerResolver
+        /// 仅依赖 surface 即可决策，避免通过 BuildCx 注入"会改变 Layer 的隐藏参数"，
+        /// 进而保持 surface 的 Hash/Eq 与缓存语义自洽。
+        cache_stability: SubagentCacheStability,
+    },
     /// 上下文压缩
     Compaction { kind: CompactionKind }, // Compact | Merge
     /// 会话标题生成
     Title,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SubagentCacheStability {
+    /// 默认；用户自定义 prompt 视为可能含瞬态内容
+    Volatile,
+    /// 用户主动承诺 prompt 内容跨会话稳定
+    Stable,
 }
 ```
 
@@ -234,7 +265,7 @@ pub enum PromptSurface {
 
 每个 Section Source 自己声明匹配规则（见 § 3.2.7 `SurfaceMatcher`），由 Composer 在装配时筛选——**Surface 不再是 Provider 列表的隐式产物，而是一等公民**。
 
-**Surface 等价类**：`Hash`/`Eq` 用于 `SurfaceMatcher::Any` 的快速匹配；`SurfacePattern::AnySubagent` 等"通配模式"在 § 3.2.7 的 `matches()` 中**忽略 `inherited_run_mode`**，仅匹配 surface kind。
+**Surface 等价类**：`Hash`/`Eq` 用于 `SurfaceMatcher::Any` 的快速匹配；`SurfacePattern::AnySubagent` 等"通配模式"在 § 3.2.7 的 `matches()` 中**忽略 `inherited_run_mode` / `cache_stability`**，仅匹配 surface kind。同 slug 的 `SubagentCustom` 在 `cache_stability` 切换时**视为不同 surface**——因为缓存语义改变，schema_version 必须 bump（见 § 3.19）。
 
 #### 3.2.2 `PromptLayer`（缓存友好分层）
 
@@ -451,38 +482,61 @@ pub enum SurfaceMatcher {
 
 ### 3.3 装配流程
 
+`Composer` 在进程启动时由 `default_registry()` 注入构造，运行时不可变；`registry` 不出现在 `build()` 签名中——避免调用方误用不一致的 registry，也保证 schema_version 单一。
+
 ```rust
-pub async fn build(
-    surface: PromptSurface,
-    cx: BuildCx<'_>,
-    registry: &SectionRegistry,
-    budget: &PromptBudget,
-) -> Result<ComposedPrompt, AppError> {
-    // 1. 拣选
-    let candidates: Vec<&SectionSpec> = registry
-        .iter()
-        .filter(|spec| spec.surfaces.matches(&surface))
-        .collect();
+pub struct Composer {
+    registry: Arc<SectionRegistry>,
+    exec_policy: SourceExecPolicy,
+    default_renderer: Arc<dyn SectionRenderer>,
+}
 
-    // 2. 并发构建（同 Layer 内并发，跨 Layer 顺序保留 deterministic ordering）
-    //    SectionOutcome::Skip / SoftFailed → 不进入下一步；Degraded / Produced → 进入
-    let mut bodies: Vec<RenderedSection> =
-        join_all_collecting_outcomes(candidates, &cx).await;
+impl Composer {
+    pub fn new(registry: Arc<SectionRegistry>, exec_policy: SourceExecPolicy) -> Self { … }
 
-    // 3. 解析每个 Section 的 Layer（PerSurface 在此处求值）
-    bodies.iter_mut().for_each(|s| s.layer = s.spec.layer.resolve(&surface));
+    pub async fn build(
+        &self,
+        surface: PromptSurface,
+        cx: BuildCx<'_>,
+        budget: &PromptBudget,
+    ) -> Result<ComposedPrompt, AppError> {
+        // 1. 拣选
+        let candidates: Vec<&SectionSpec> = self.registry
+            .iter()
+            .filter(|spec| spec.surfaces.matches(&surface))
+            .collect();
 
-    // 4. per-section 长度检查 → 超限即截断 + warning
-    enforce_per_section_budget(&mut bodies, budget);
+        // 2. 并发构建（同 Layer 内并发，跨 Layer 顺序保留 deterministic ordering）
+        //    SectionOutcome::Skip / SoftFailed → 不进入下一步；Degraded / Produced → 进入
+        let mut bodies: Vec<RenderedSection> =
+            join_all_collecting_outcomes(candidates, &cx, &self.exec_policy).await;
 
-    // 5. 排序：(Layer, SectionOrder, SectionId 字典序作为 tie-breaker，保证可重现)
-    bodies.sort_by_key(|s| (s.layer, s.spec.order_hint, s.spec.id.clone()));
+        // 3. 解析每个 Section 的 Layer（PerSurface 在此处求值）
+        bodies.iter_mut().for_each(|s| s.layer = s.spec.layer.resolve(&surface));
 
-    // 6. 全局长度检查 → 按 budget.eviction_order 驱逐 / 截断关键 Section
-    enforce_total_budget(&mut bodies, budget);
+        // 4. per-section 长度检查 → 超限即截断 + warning
+        enforce_per_section_budget(&mut bodies, budget);
 
-    // 7. 渲染为 PromptBlock[] + 在 StablePrefix / SessionStable 末尾打 cache marker
-    render_blocks(bodies, surface, registry.schema_version())
+        // 5. 排序：(Layer, SectionOrder, SectionId 字典序作为 tie-breaker，保证可重现)
+        bodies.sort_by_key(|s| (s.layer, s.spec.order_hint, s.spec.id.clone()));
+
+        // 6. 全局长度检查 → 按 budget.eviction_order 驱逐 / 截断关键 Section
+        enforce_total_budget(&mut bodies, budget);
+
+        // 7. 渲染为 PromptBlock[] + 在剩余 Layer 末尾打 cache marker（滑动规则见 § 3.7.1）
+        render_blocks(bodies, surface, self.registry.schema_version())
+    }
+
+    /// 单 Section 渲染——给 `build_implementation_handoff_prompt` 等"借用 Section 文本拼 user message" 的路径使用。
+    /// 不打 cache marker、不进入 audit、不参与 budget、**不触发 RuntimeMessageInjector**。
+    /// 内部使用裁剪过的 `BuildCx`：丢弃 `signals` 改用一次性 `SignalCache::standalone()`，
+    /// 防止污染调用方主路径的 SignalCache 与并发计数。
+    pub async fn render_section_only(
+        &self,
+        id: SectionId,
+        surface: &PromptSurface,
+        cx: &BuildCx<'_>,
+    ) -> Option<SectionBody> { … }
 }
 ```
 
@@ -564,6 +618,15 @@ pub struct BuildCx<'a> {
     pub raw_plan: Option<&'a RuntimeModelPlan>,
     pub run_mode: RunMode,
     pub helper_profile: Option<&'a SubagentProfile>,
+    /// 子代理 surface 时，CustomSubagentBody Source 通过它查到要渲染哪条 prompt；
+    /// MainAgent / Compaction / Title Surface 下为 None
+    pub custom_subagent_slug: Option<&'a str>,
+    /// 目标 LLM 标识；用于 `PromptBudget::for_model` 求值（context window）
+    /// 与 `SectionRenderer` 的 model-aware 选择
+    pub target_model: ModelTarget,
+    /// 时间相关数据 Source 必须从此读，禁止 `Utc::now()` / `SystemTime::now()`
+    /// （§ 3.18 副作用约束）；CurrentDateInjector 也走同一 Clock
+    pub clock: Arc<dyn Clock>,
     /// 信号缓存：Source 通过 cx.signal::<T>(key) 查询并自动 memoize；
     /// 同一 (TypeId, key) 并发请求共享一个 OnceCell，避免重复 DB 查询
     pub signals: Arc<SignalCache>,
@@ -572,6 +635,17 @@ pub struct BuildCx<'a> {
     pub features: Arc<PromptFeatureSet>,
     /// 渲染器（§ 3.14）：由调用方根据目标 LLM provider 选择
     pub renderer: Arc<dyn SectionRenderer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ModelTarget {
+    AnthropicClaude { context_window: usize, supports_cache_control: bool },
+    OpenAiCompat { context_window: usize },
+    Local { context_window: usize },
+}
+
+pub trait Clock: Send + Sync {
+    fn now_utc(&self) -> DateTime<Utc>;
 }
 ```
 
@@ -585,30 +659,25 @@ pub struct SignalKey {
 }
 
 pub struct SignalCache {
-    /// (TypeId, SignalKey) → OnceCell<Arc<dyn Any + Send + Sync>>
-    /// 用 tokio::sync::OnceCell 而非 std::sync::Mutex，禁止跨 await 持锁；
+    /// (TypeId, SignalKey) → Slot；用 tokio::sync::OnceCell 跨 await 不持锁；
     /// 索引表本身用短临界区的 std::sync::Mutex 保护（不跨 await）
-    inner: Mutex<HashMap<(TypeId, SignalKey), Arc<OnceCell<Arc<dyn Any + Send + Sync>>>>>,
+    inner: Mutex<HashMap<(TypeId, SignalKey), Arc<SignalSlot>>>,
 }
 
-impl SignalCache {
-    pub async fn get_or_init<T, F, Fut>(&self, key: SignalKey, init: F) -> Arc<T>
-    where
-        T: Send + Sync + 'static,
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Arc<T>>,
-    {
-        // 1) 短临界区：拿/建 OnceCell
-        let cell = {
-            let mut g = self.inner.lock().unwrap();
-            g.entry((TypeId::of::<T>(), key))
-                .or_insert_with(|| Arc::new(OnceCell::new()))
-                .clone()
-        };
-        // 2) 跨 await 不持锁；并发到此处会共享同一 OnceCell
-        let any = cell.get_or_init(|| async { init().await as Arc<dyn Any + Send + Sync> }).await;
-        any.clone().downcast::<T>().expect("signal type stable per TypeId")
-    }
+struct SignalSlot {
+    cell: OnceCell<SignalResult>,
+    /// 当前 init 是否在执行中——用于循环依赖检测
+    in_flight: AtomicBool,
+}
+
+#[derive(Clone)]
+enum SignalResult {
+    Ready(Arc<dyn Any + Send + Sync>),
+    /// init 失败：缓存"失败标记"而非 panic OnceCell；下次同 cx 内的查询直接返回 Err，
+    /// **不重试**（保证幂等），但允许在新 BuildCx 中重新尝试。
+    /// 这避免了 OnceCell 一旦 set 永远 poison 的问题——init 抛错时 OnceCell 仍未 set，
+    /// 我们手动写入 Failed 标记代替之。
+    Failed(SignalFailure),
 }
 ```
 
@@ -618,6 +687,8 @@ impl SignalCache {
 - **复合键**：`(TypeId, SignalKey)` 让同一信号可以按 workspace / thread 分别缓存（例：`SkillsSignal` 在 workspace A 与 B 不共享）
 - **生命周期**：`SignalCache` 同 `BuildCx`，**一次 build 内** memoize；不跨 build 共享，避免脏读 / TTL 设计
 - **类型安全**：`downcast` 失败说明同一 `TypeId` 被两处用作不同类型，是 bug，应 panic（启动期单测覆盖）
+- **失败缓存**：init 失败时写入 `Failed(SignalFailure)` 而非让 `OnceCell` 永久 poison。同一 cx 内不重试，但下一次 build（新 cache）可重新尝试——避免一次瞬时 IO 抖动让整次 build 永远不可恢复
+- **循环依赖检测**：`SignalSlot::in_flight = true` 进入 init；若同一 cx 内同一 (TypeId, SignalKey) 在 in_flight 时再次被请求 → 返回 `Failed(SignalFailure::Cycle { chain })`，由消费方决定走 SoftFailed 还是 FatalError；`cargo test prompt::signal_cycle_detected` 覆盖
 
 `Composer` 进程内单例 `Arc<Composer>`，registry 不可变；`PromptFeatureSet` 走 `BuildCx` 而非 registry，便于 A/B 实验热切换。
 
@@ -736,6 +807,21 @@ pub struct CacheMarkerSlot {
 3. **超额**：消息层 `allocate_for_messages(requested)` 若 `requested > remaining` → 返回 `remaining`，记 `prompt.cache_marker.over_request` metric；消息层必须按返回值裁剪，绝不允许"先发后协商"
 4. **审计**：每个 marker 在 `ComposedPrompt.audit` 与消息层日志中均带 `block_index + byte_offset`，事故复盘时可还原 4 个 breakpoint 的真实位置
 5. **回归测试**：`cargo test prompt::cache_marker_quota` 制造极端场景（StablePrefix 截断为空、消息层申请 5 个）→ 验证总数 ≤ 4 且优先满足 system 端
+
+**Layer 被掏空时的滑动规则**：
+
+预算驱逐 / 截断后，可能出现"`StablePrefix` 整层为空"或"`SessionStable` 内仅剩 1 个 Section"等情况，原"在 Layer 末尾打 marker" 的天真规则会失效（marker 落在不存在的 block 上 / 落在过短的稳定段上反而降低命中率）。Composer 在渲染阶段按以下次序选择 marker 位置：
+
+| 步骤 | 规则 |
+|------|------|
+| 1 | 计算每个 Layer 渲染后的 block 字符长度；丢弃长度 = 0 的 Layer |
+| 2 | 若剩余非空 Layer 数 ≥ 2 → 在前两个稳定性最高的 Layer（StablePrefix > SessionStable > RuntimeOverlay）末尾各打一个 `Ephemeral` marker |
+| 3 | 若仅剩 1 个非空 Layer 且其字符数 ≥ `min_marker_chars`（默认 1 KB）→ 仅打 1 个 marker；记 `prompt.cache_marker.degraded_to_one` metric |
+| 4 | 若唯一 Layer 字符数 < `min_marker_chars` → 不打 marker；记 `prompt.cache_marker.skipped` metric（强制不打的目的是避免缓存"碎片化命中"反而拖累整体延迟） |
+| 5 | `Ephemeral` Layer **永远不打** marker（按定义就不稳定，缓存会污染下一轮） |
+| 6 | `audit.cache_markers` 字段记录最终落点 + 触发滑动的原因（如 `"reason": "stable_prefix_emptied"`） |
+
+`min_marker_chars` 由 `ModelTarget` 决定（Anthropic ≥ 1024 字符 cache 才有显著收益；本地小模型默认 0 即可），通过 `BuildCx::target_model` 求值。
 
 ### 3.8 子代理构建
 
@@ -970,6 +1056,40 @@ pub struct PromptBudget {
     pub eviction_order: Vec<PromptLayer>,
     // 默认：[Ephemeral, RuntimeOverlay, SessionStable, StablePrefix]
 }
+
+impl PromptBudget {
+    /// Model-aware 构造：把 context window 转成字符预算（启发式 1 token ≈ 4 chars，
+    /// 安全裕度 0.3）。调用方应当传入 ModelTarget，避免对不同 context window
+    /// 的模型用同一份硬编码上限。
+    pub fn for_model(model: &ModelTarget, surface: &PromptSurface) -> Self {
+        let ctx = model.context_window();
+        let total_chars = (ctx as f32 * 4.0 * 0.30) as usize;
+        let per_section_default_chars = (total_chars as f32 * 0.10) as usize;
+        let mut per_section_overrides = BTreeMap::new();
+        // BehavioralGuidelines / FinalResponseStructure 是大头静态文案，给更大配额
+        per_section_overrides.insert(SectionId::BehavioralGuidelines, total_chars / 2);
+        per_section_overrides.insert(SectionId::FinalResponseStructure, total_chars / 4);
+        // 用户来源 Section 给更紧的配额，防止滥用
+        per_section_overrides.insert(SectionId::ProjectContext, total_chars / 8);
+        per_section_overrides.insert(SectionId::CustomSubagentBody, total_chars / 4);
+        // Compaction / Title Surface 用更紧的总预算
+        let total_chars = match surface {
+            PromptSurface::Compaction { .. } | PromptSurface::Title => total_chars / 2,
+            _ => total_chars,
+        };
+        Self {
+            total_chars,
+            per_section_default_chars,
+            per_section_overrides,
+            eviction_order: vec![
+                PromptLayer::Ephemeral,
+                PromptLayer::RuntimeOverlay,
+                PromptLayer::SessionStable,
+                PromptLayer::StablePrefix,
+            ],
+        }
+    }
+}
 ```
 
 Composer 行为：
@@ -978,6 +1098,8 @@ Composer 行为：
 2. **全局检查**：所有 Section 渲染完后若 total 超限 → 按 `eviction_order` 删 Section（先丢 Ephemeral 中 `order_hint` 最大的；同 Layer 内按 size 降序选择）
 3. **底线保护**：仍超限 → StablePrefix 内的 Section 截断而非删除（删除会破坏行为契约）
 4. 全程审计落 `ComposedPrompt.warnings`，触发 `prompt.budget.truncated` / `prompt.budget.evicted` metric，超阈值告警
+
+`PromptBudget` 的实际数值是**运行时配置**，**不进入 schema_version**（§ 3.19）；但调整默认值 / 默认 eviction 顺序需要发版说明 + 灰度。
 
 ### 3.13 StablePrefix 纯净性 lint
 
@@ -1018,8 +1140,19 @@ pub struct XmlRenderer;
 
 - `BuildCx::renderer` 由调用方根据目标 model 选择
 - 阶段 1 byte-equal 双轨强制使用 `MarkdownRenderer`
-- 阶段 5 之后允许灰度 `XmlRenderer`，但**必须**与 cache_purity / 快照测试套件对齐——切换 renderer 等同于一次 schema_version bump
+- 阶段 5 之后允许灰度 `XmlRenderer`，但**必须**与 cache_purity / 快照测试套件对齐
 - renderer 名字进入 `SectionAudit.renderer` 字段，事故复盘可见
+
+**灰度切换路径**：
+
+`SectionRenderer` 是**全局影响**的开关——切换会让 system prompt 字面 100% 改变，prefix cache 全量失效。因此切换不能简单 PR 合并即生效，必须遵循：
+
+1. **不通过 `PromptFeatureSet` 静默切换**：feature flag 用于 Section 级开关，全局 renderer 切换走 § 3.19 schema_version 显式 bump
+2. **新 renderer 实现先并行存在**：以 `RendererCandidate { name, instance, enabled_models: HashSet<ModelTarget> }` 注册到 `RendererRegistry`，不替换默认
+3. **per-model 灰度**：`BuildCx::renderer` 由调用方根据 `ModelTarget` 选取——同进程不同模型可使用不同 renderer，互不影响 cache
+4. **流量灰度**：通过 `PROMPT_RENDERER_OVERRIDE = "xml@anthropic-claude:5%"` 环境变量按 thread_id hash 分桶；与 `PromptFeatureSet` 共享 salt 但**单独审计**
+5. **schema_version bump**：每次默认 renderer 变更必须 bump `registry.schema_version`（§ 3.19 表格已列出此规则），方便事故复盘按 schema_version 切片
+6. **回退**：旧 renderer 至少保留两个发版周期（约 4 周）才允许移除；环境变量 `PROMPT_RENDERER_FORCE = "markdown"` 提供应急回退
 
 ### 3.15 灰度配置：`PromptFeatureSet`
 
@@ -1063,6 +1196,19 @@ async fn build(&self, cx: &BuildCx<'_>) -> Result<SectionOutcome, FatalError> {
 5. **审计**：每次 build 在 `ComposedPrompt.audit` 顶层 `feature_snapshot` 字段记录所有被 Section 实际读取过的 flag → value，便于复盘"这次为什么走了 v2 分支"
 6. **测试**：每个用到 flag 的 Source 必须有 _flag-on / flag-off_ 两份快照测试
 
+**与 `schema_version` 的关系**：
+
+| 操作 | bump `schema_version` | bump 该 Section `version` |
+|------|----------------------|--------------------------|
+| 新增 flag（默认 off，`Skip` 分支等价于 flag 不存在） | ❌ | ❌ |
+| 新增 flag（默认 on，立刻改变行为） | ✅ | ✅ |
+| 调整 flag 默认值 | ✅ | ❌ |
+| 调整 flag rollout 百分比（线上灰度推进） | ❌ | ❌ |
+| 删除已 100% 上线的 flag（代码合并 v2 分支为唯一路径） | ❌ | ❌（已在上线时 bump） |
+| 临时把 flag 强制翻面（应急 kill switch） | ❌ | ❌（事后补 bump） |
+
+设计原则：flag 是**软配置**，运行时切换不应触发审计 schema 跳变；但默认值变化会改变绝大多数会话的行为，等同于"改了一行模板"，必须 bump 与 Section `version`。flag 引入时若**默认 off**，不视为行为变更，避免每次实验都 bump schema。
+
 ### 3.16 Minimum Viable Prompt
 
 防止极端故障下输出空 system prompt 或残缺 prompt：
@@ -1077,9 +1223,38 @@ async fn build(&self, cx: &BuildCx<'_>) -> Result<SectionOutcome, FatalError> {
 
 **`EmergencyFallback` 不依赖运行时模板系统**：
 
-`EmergencyFallback` 必须在"模板加载子系统本身故障 / 所有模板加载失败 / SignalCache 异常"等极端路径下仍然可用。因此其文本通过 `include_str!("templates/emergency_fallback.md")` 在**编译期**嵌入 `&'static str`，渲染逻辑不走 `render_template_strict`、不查 `SignalCache`、不读 SQLite——纯字符串拼接。任何对该路径引入运行时依赖的 PR 都会被 `cargo test prompt::emergency_fallback_purity` 拦截（该测试 mock 一个全部失败的 fixture，要求 build 仍返回 `Ok(ComposedPrompt)`）。
+`EmergencyFallback` 必须在"模板加载子系统本身故障 / 所有模板加载失败 / SignalCache 异常"等极端路径下仍然可用。因此其文本通过 `include_str!("templates/emergency_fallback/*.md")` 在**编译期**嵌入 `&'static str`，渲染逻辑不走 `render_template_strict`、不查 `SignalCache`、不读 SQLite——纯字符串拼接。任何对该路径引入运行时依赖的 PR 都会被 `cargo test prompt::emergency_fallback_purity` 拦截（该测试 mock 一个全部失败的 fixture，要求 build 仍返回 `Ok(ComposedPrompt)`）。
 
-`EmergencyFallback` 进入兜底分支的频率有 metric `prompt.fallback.emergency_total`，超 1/万即 P1 告警——这是"我们的 prompt 系统整体在异常"的最强信号。
+**Per-Surface fallback 文本**：单一通用 fallback 在不同 Surface 下意义差太多——给 `Title` Surface 灌输 `BehavioralGuidelines` 是噪音，给 `Compaction` Surface 不给压缩契约会让摘要质量暴跌。因此 `EmergencyFallback` 按 Surface 分文件：
+
+```
+templates/emergency_fallback/
+    main_agent.md          # Role + 极简 BehavioralGuidelines + FinalResponseStructure
+    subagent_explore.md    # Role + 极简 SubagentOutputContract（explore 变体）
+    subagent_review.md     # Role + 极简 SubagentOutputContract（review 变体）
+    subagent_custom.md     # Role + "use the user-provided system prompt below" 占位
+    compaction.md          # Role + 极简 CompactionContract
+    title.md               # Role + 极简 TitleContract
+```
+
+选择规则：
+
+```rust
+fn emergency_fallback_text(surface: &PromptSurface) -> &'static str {
+    match surface {
+        PromptSurface::MainAgent { .. }     => include_str!("templates/emergency_fallback/main_agent.md"),
+        PromptSurface::SubagentExplore { .. } => include_str!("templates/emergency_fallback/subagent_explore.md"),
+        PromptSurface::SubagentReview { .. }  => include_str!("templates/emergency_fallback/subagent_review.md"),
+        PromptSurface::SubagentCustom { .. }  => include_str!("templates/emergency_fallback/subagent_custom.md"),
+        PromptSurface::Compaction { .. }    => include_str!("templates/emergency_fallback/compaction.md"),
+        PromptSurface::Title                => include_str!("templates/emergency_fallback/title.md"),
+    }
+}
+```
+
+每个 fallback 文本严格限制在 ≤ 1 KB，**不含任何占位符**——保证编译期可静态校验且零运行时分支。新增 `PromptSurface` 变体时由 § 3.17 `SurfaceExtension` lint 顺带强制要求新增对应文件。
+
+`EmergencyFallback` 进入兜底分支的频率有 metric `prompt.fallback.emergency_total{surface=…}`（按 Surface 维度），超 1/万即 P1 告警——这是"我们的 prompt 系统整体在异常"的最强信号。
 
 **关键 Section 清单**（默认；可在 registry 注册时通过 `SectionSpec.criticality = Critical` 覆盖）：
 
@@ -1145,7 +1320,29 @@ pub trait SurfaceExtension {
 | `PromptBudget` 默认值调整（仅数值） | — | ❌（运行时配置，不入 schema） |
 | 仅 metric / tracing 字段增减 | — | ❌ |
 
-`schema_version` 是**全局单调整数**，提交者必须在 PR 模板中勾选"已 bump schema_version"复选框；CI `cargo test prompt::schema_version_monotonic` 比对 base 分支与当前分支的 `schema_version`，若属于上述"必须 bump" 行但未变更 → 失败并提示具体规则。
+`schema_version` 是**全局单调整数**，提交者必须在 PR 模板中勾选"已 bump schema_version"复选框。
+
+**CI 工程化降级实现**：自动判定"哪些代码变更必须 bump schema_version" 在工程上不可靠（涉及跨文件语义分析），因此 `cargo test prompt::schema_version_monotonic` 采用三级守门：
+
+| 守门级 | 检查方式 | 失败处理 |
+|--------|---------|---------|
+| L1 hard（CI 必跑） | base 分支 `schema_version` 与当前分支字面比较；只允许 `cur > base` 或 `cur == base` | 若 `cur < base` → 直接 fail（防止合并冲突时把版本号搞回退） |
+| L2 hint（CI 必跑） | 扫描 diff 中是否触及白名单文件（`registry.rs`, `surface.rs`, `layer.rs`, `templates/**/*.md`, `sources/**/*.rs`），且 `schema_version` 未 bump → 输出 `WARN`（非 block） | 输出 GitHub Actions annotation；reviewer 必须在 PR 描述确认"无需 bump"或补 bump |
+| L3 soft（dev guideline） | 在 PR 模板提供"是否触发 § 3.19 表格中需 bump 行" 的 self-check checklist；reviewer 在 review checklist 中复核 | 流程性约束 |
+
+**为什么不做"自动决定该 bump 哪个"**：
+- 模板文案改 1 字 vs 改整段 vs 切换 Section ID，从 diff 静态分析判定语义影响代价过高
+- 跨 Section anchor 调整等隐式影响难以扫描
+- 留给开发者 + reviewer 协同决策更稳健；自动化只兜底"显著漏 bump"
+
+PR 模板增加：
+
+```markdown
+## Prompt schema impact
+- [ ] 不涉及 `prompt::*` 模块
+- [ ] 涉及；已按 § 3.19 规则 bump `schema_version`：__前 → 后__
+- [ ] 涉及；按 § 3.19 表格不需要 bump（说明：______________）
+```
 
 ### 3.20 模板 front-matter 与 Section version 绑定
 
@@ -1183,7 +1380,68 @@ You are TiyCode, an autonomous coding agent...
 | `subagent::runtime_orchestration::SubagentProfile::system_prompt` | `Composer::build(PromptSurface::SubagentExplore / Review / Custom, …)` | § 4 阶段 2b |
 | `agent_session::inject_goal_context` | `ActiveGoalSource`（Ephemeral） | § 4 阶段 4 |
 
-新增的子接口 `Composer::render_section_only(id, surface, cx)`：返回 `Option<SectionBody>`，**绕过装配链路**，仅渲染单个 Section 用于 user message 拼装等场景；该接口不打 cache marker、不进入 audit、不参与 budget——属于"借用 Section 实现，不属于 prompt"，调用点必须在文档/代码注释中显式说明用途。
+新增的子接口 `Composer::render_section_only(id, surface, cx)`：返回 `Option<SectionBody>`，**绕过装配链路**，仅渲染单个 Section 用于 user message 拼装等场景；该接口不打 cache marker、不进入 audit、不参与 budget——属于"借用 Section 实现，不属于 prompt"。
+
+**BuildCx 隔离**：`render_section_only` 内部用 `BuildCx::for_section_only(parent_cx)` 派生独立子 cx：
+
+| 字段 | 派生策略 |
+|------|---------|
+| `signals` | **新建** `SignalCache::standalone()`——避免污染调用方主路径的 SignalCache |
+| `features` | 复用 |
+| `clock` | 复用 |
+| 其余 | 复用 |
+
+**禁止规则**：
+1. 调用方**不得**在拿到 `SectionBody` 后再调用 `Composer::build` 主路径——分离调用，避免上下文混乱
+2. `RuntimeMessageInjector` 在该路径下**不触发**（它是消息层职责，user message 构造器自己决定是否注入运行时上下文）
+3. 调用点必须在文档/代码注释中显式说明用途；`tracing::trace!(target="prompt.render_section_only", id=?id)` 强制埋点
+
+### 3.22 子代理继承的 Section 默认清单
+
+子代理 Surface（`SubagentExplore` / `SubagentReview` / `SubagentCustom`）从父主代理"继承"哪些 Section，是行为契约——以前由字符串解析的 `HELPER_INHERITED_SECTION_TITLES` 实现，现在分散到各 Source 的 `surfaces: SurfaceMatcher` 字段上。**散落的真相源容易漏配**，必须集中维护一份对照表 + 启动期 lint：
+
+```rust
+/// 真相源：哪些 Section ID 必须出现在每个子代理 Surface 上。
+/// 维护方式：增删 Section / 调整 SurfaceMatcher 时**同步**修改此清单；
+/// 启动期 lint 强制 (清单 ⊆ registry filter 结果)。
+pub const SUBAGENT_INHERITED_SECTIONS: &[(SubagentSurfaceKind, &[SectionId])] = &[
+    (SubagentSurfaceKind::Explore, &[
+        SectionId::Role,
+        SectionId::SystemEnvironment,
+        SectionId::ProjectContext,
+        SectionId::ProfileInstructions,
+        SectionId::WorkspaceLocation,
+        SectionId::ShellToolingGuide,
+        SectionId::SubagentOutputContract,
+    ]),
+    (SubagentSurfaceKind::Review, &[
+        SectionId::Role,
+        SectionId::SystemEnvironment,
+        SectionId::ProjectContext,
+        SectionId::ProfileInstructions,
+        SectionId::WorkspaceLocation,
+        SectionId::ShellToolingGuide,
+        SectionId::SubagentOutputContract,
+    ]),
+    (SubagentSurfaceKind::Custom, &[
+        SectionId::Role,
+        SectionId::SystemEnvironment,
+        SectionId::ProjectContext,
+        SectionId::ProfileInstructions,
+        SectionId::WorkspaceLocation,
+        SectionId::CustomSubagentBody,
+        SectionId::SubagentOutputContract,
+    ]),
+];
+```
+
+启动期测试 `cargo test prompt::subagent_inheritance_complete`：
+1. 对每个 `SubagentSurfaceKind`，构造一个最小 `PromptSurface` 实例
+2. 调用 `registry.iter().filter(|s| s.surfaces.matches(&surface))` 得到实际清单
+3. 必须满足 `SUBAGENT_INHERITED_SECTIONS[kind] ⊆ 实际清单`——超集允许（增加新 Section），子集不允许（漏继承）
+4. **额外不允许**：BehavioralGuidelines / FinalResponseStructure 出现在子代理 Surface 上（这是主代理专属契约）；启动期 lint 强制断言
+
+修改 `SUBAGENT_INHERITED_SECTIONS` 必须 bump `schema_version`（§ 3.19 表格"`SurfaceMatcher` 调整" 行）。
 
 ---
 
@@ -1191,11 +1449,11 @@ You are TiyCode, an autonomous coding agent...
 
 ### 阶段 0：脚手架（不改语义）
 
-1. 在 `prompt/` 下新增模块：`layer.rs`、`surface.rs`、`section_id.rs`、`registry.rs`、`composer.rs`、`signals.rs`、`templates.rs`、`budget.rs`、`runtime_message.rs`、`exec_policy.rs`、`cache_marker.rs`、`surface_extensions.rs`、`error_codes.rs`，但**不接通**到 `agent_session`
-2. 引入新类型：`SectionOutcome`、`SurfacePattern`/`SurfaceMatcher`、`LayerResolver`、`PromptBlock`/`CacheMarker`、`PromptBudget`、`schema_version`、`SourceExecPolicy`、`CacheMarkerArbiter`、`SurfaceExtension`、`Clock`，仅在适配层使用，不影响行为
-3. 新增 `prompt/templates/*.md` 目录，仅复制（不修改）现有字面量；**模板 front-matter（§ 3.20）+ 严格模式 + 启动期 lint 测试**全部上线
+1. 在 `prompt/` 下新增模块：`layer.rs`、`surface.rs`、`section_id.rs`、`registry.rs`、`composer.rs`、`signals.rs`、`templates.rs`、`budget.rs`、`runtime_message.rs`、`exec_policy.rs`、`cache_marker.rs`、`surface_extensions.rs`、`error_codes.rs`、`redactor.rs`、`renderer.rs`、`feature_set.rs`、`inheritance.rs`、`emergency_fallback.rs`、`clock.rs`，但**不接通**到 `agent_session`
+2. 引入新类型：`SectionOutcome`、`SurfacePattern`/`SurfaceMatcher`、`SubagentCacheStability`、`LayerResolver`、`PromptBlock`/`CacheMarker`、`PromptBudget`/`ModelTarget`、`schema_version`、`SourceExecPolicy`、`CacheMarkerArbiter`、`SurfaceExtension`、`Clock`，仅在适配层使用，不影响行为
+3. 新增 `prompt/templates/*.md` 目录（含 `emergency_fallback/*.md` 全部 6 个 per-Surface 文件），仅复制（不修改）现有字面量；**模板 front-matter（§ 3.20）+ 严格模式 + 启动期 lint 测试**全部上线
 4. 新增 `SectionSource` trait 与适配器 `LegacyProviderAdapter`，把现有 5 个 `*Provider` 包成 `SectionSource`，但仍允许旧路径并存
-5. 上线启动期 lint 测试套件（一次性补齐，避免后续阶段受 lint 阻塞）：`anchors_*`、`templates_*`、`surface_extensions_complete`、`error_codes_registered`、`schema_version_monotonic`、`emergency_fallback_purity`
+5. 上线启动期 lint 测试套件（一次性补齐，避免后续阶段受 lint 阻塞）：`anchors_*`、`templates_*`、`surface_extensions_complete`、`error_codes_registered`、`schema_version_monotonic`、`emergency_fallback_purity`、`subagent_inheritance_complete`、`signal_cycle_detected`
 
 ### 阶段 1：装配器双轨（主代理 byte-equal 切换）
 
@@ -1283,22 +1541,26 @@ hash_match < 100% 时，diff 必须落在以下"已知良性差异"之一才允�
 ```
 src-tauri/src/core/prompt/
 ├── mod.rs                     # pub use composer::*; pub use surface::*; …
-├── composer.rs                # PromptComposer + ComposedPrompt + 渲染逻辑
+├── composer.rs                # PromptComposer + ComposedPrompt + 渲染逻辑（registry 在 new() 注入）
 ├── registry.rs                # SectionRegistry + 默认注册函数 + schema_version
-├── surface.rs                 # PromptSurface, SurfacePattern, SurfaceMatcher
+├── surface.rs                 # PromptSurface, SurfacePattern, SurfaceMatcher, SubagentCacheStability
 ├── surface_extensions.rs      # SurfaceExtension trait + 启动期完整性 lint（§ 3.17）
 ├── layer.rs                   # PromptLayer, LayerResolver, SectionOrder, SectionAnchor
 ├── section.rs                 # SectionId, SectionSpec, SectionBody, SectionOutcome, SectionAudit
-├── source.rs                  # SectionSource trait, BuildCx, BuildSignal, FatalError, Clock
+├── source.rs                  # SectionSource trait, BuildCx, BuildSignal, FatalError
+├── clock.rs                   # Clock trait + SystemClock + FixedClock（测试用）
 ├── exec_policy.rs             # SourceExecPolicy + Composer 调度（超时/并发/背压）（§ 3.6.1）
-├── signals.rs                 # SignalCache + 内置 signal（policy / writable_roots / …）
+├── signals.rs                 # SignalCache + 内置 signal（policy / writable_roots / …）+ 循环检测 + 失败重试
 ├── templates.rs               # 占位符渲染器（严格模式 + dev 热重载 + lint + front-matter 解析）
-├── budget.rs                  # PromptBudget + 截断/驱逐策略
-├── cache_marker.rs            # CacheMarkerArbiter + 全局配额仲裁（§ 3.7.1）
+├── budget.rs                  # PromptBudget + PromptBudget::for_model + 截断/驱逐策略
+├── cache_marker.rs            # CacheMarkerArbiter + 全局配额仲裁 + 滑动规则（§ 3.7.1）
 ├── runtime_message.rs         # RuntimeMessageInjector + CompactionPolicy + CurrentDateInjector
 ├── error_codes.rs             # SoftFailed.code 常量集中注册（§ 3.18）
 ├── redactor.rs                # PII 脱敏（tracing 字段 + warning 落库前过滤）
-├── emergency_fallback.rs      # 编译期内联 fallback；不依赖 templates/signals（§ 3.16）
+├── renderer.rs                # SectionRenderer + Markdown/Xml + RendererRegistry（§ 3.14 灰度切换）
+├── feature_set.rs             # PromptFeatureSet + flag 加载（env / 用户级 / 工作区级）
+├── inheritance.rs             # SUBAGENT_INHERITED_SECTIONS + lint（§ 3.22）
+├── emergency_fallback.rs      # 编译期内联 per-Surface fallback；不依赖 templates/signals（§ 3.16）
 ├── sources/
 │   ├── mod.rs
 │   ├── role.rs
@@ -1328,7 +1590,13 @@ src-tauri/src/core/prompt/
     ├── sandbox_permissions.tpl.md
     ├── skills_usage.md
     ├── active_goal.tpl.md
-    ├── emergency_fallback.md              # 编译期内联，不参与运行时模板加载
+    ├── emergency_fallback/                # § 3.16 per-Surface fallback；编译期内联，不参与运行时模板加载
+    │   ├── main_agent.md
+    │   ├── subagent_explore.md
+    │   ├── subagent_review.md
+    │   ├── subagent_custom.md
+    │   ├── compaction.md
+    │   └── title.md
     ├── subagent/
     │   ├── explore.md
     │   ├── review.md
@@ -1348,11 +1616,15 @@ src-tauri/src/core/prompt/
 ### 6.1 主代理
 
 ```rust
-let composer = composer::default();
+// Composer 在进程启动时由 default_registry() 注入构造，全局单例
+let composer: Arc<Composer> = composer_singleton();
+let budget = PromptBudget::for_model(&model_target, &surface);
+let cx = BuildCx::for_main_agent(pool, &raw_plan, workspace_path, thread_id, &model_target);
+
 let composed = composer
     .build(
         PromptSurface::MainAgent { run_mode: RunMode::Default },
-        BuildCx::for_main_agent(pool, &raw_plan, workspace_path, thread_id),
+        cx,
         &budget,
     )
     .await?;
@@ -1368,9 +1640,9 @@ agent.set_system_prompt_blocks(composed.blocks);
 ```rust
 let composed = composer
     .build(
-        PromptSurface::SubagentExplore,
-        BuildCx::for_helper(parent_cx, &helper_profile),
-        &budget,
+        PromptSurface::SubagentExplore { inherited_run_mode: parent_cx.run_mode },
+        BuildCx::derive_for_helper(parent_cx, &helper_profile),
+        &PromptBudget::for_model(&parent_cx.target_model, &subagent_surface),
     )
     .await?;
 agent.set_system_prompt_blocks(composed.blocks);
@@ -1478,6 +1750,19 @@ registry.register(SectionSpec {
 | schema_version 漏 bump | § 3.19 PR 模板复选框 + `schema_version_monotonic` CI lint |
 | EmergencyFallback 自身依赖故障子系统 | § 3.16 编译期 `include_str!` + 纯字符串拼接 + `emergency_fallback_purity` 测试 |
 | `build_implementation_handoff_prompt` 在迁移中漏归并 | § 3.21 单独列出；通过 `Composer::render_section_only` 共享 ProfileInstructions 文本 |
+| `SignalCache` init 失败永久 poison | § 3.6 OnceCell 不 set 失败值，写 `SignalResult::Failed` 标记；同 cx 不重试，下一次 build（新 cache）可重试 |
+| `SignalCache` 出现循环依赖（A→B→A） | § 3.6 `in_flight` 标记 + `Failed(Cycle)` 显式失败；`signal_cycle_detected` 测试 |
+| Cache marker 落在已被预算掏空的 Layer | § 3.7.1 Layer 滑动规则：仅向非空 Layer 打 marker，过短 Layer 不打；按 ModelTarget 决定 `min_marker_chars` |
+| 不同 model context window 用同一份硬编码上限 | § 3.12 `PromptBudget::for_model(&ModelTarget, &surface)` 派生预算 |
+| `cache_stability` 通过 profile 注入但 LayerResolver 拿不到 | § 3.2.1 提升到 `PromptSurface::SubagentCustom { cache_stability }`；surface 自洽 |
+| `CustomSubagentBody` 不知该渲染哪条 prompt | § 3.6 `BuildCx::custom_subagent_slug` 显式传入 |
+| 单一 EmergencyFallback 文本对不同 Surface 不合身 | § 3.16 per-Surface fallback 文件（main_agent / subagent_* / compaction / title） |
+| 引入 flag 时是否 bump schema_version 不明确 | § 3.15 表格化规则：flag 默认 off → 不 bump；默认 on / 默认值切换 → bump |
+| 切换默认 SectionRenderer 让 prefix cache 全失效 | § 3.14 灰度路径：per-model 选择 + thread_id 分桶 + `PROMPT_RENDERER_FORCE` 应急回退；schema_version 强制 bump |
+| `Composer::render_section_only` 污染主路径 SignalCache | § 3.21 内部用 `BuildCx::for_section_only` 派生独立 SignalCache；不触发 RuntimeMessageInjector |
+| schema_version_monotonic 自动判定不可靠 | § 3.19 三级守门：L1 严格不退步 + L2 改动 hint + L3 PR 模板复选框 |
+| 子代理继承清单散落到各 Source 易漏配 | § 3.22 集中维护 `SUBAGENT_INHERITED_SECTIONS` + `subagent_inheritance_complete` 启动期 lint |
+| Composer 入口签名不一致（registry 是参数还是构造时注入） | § 3.3 统一：registry 在 `Composer::new` 注入，`build()` 不传 |
 
 回滚路径：阶段 1 完成前可整体回退到旧 `build_system_prompt`；阶段 1 之后通过 feature flag `PROMPT_COMPOSER_V2 = false` 走兼容分支，保留至少 1 个版本。
 
