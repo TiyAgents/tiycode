@@ -63,7 +63,7 @@ pub struct BuildCx<'a> {
     pub run_mode: RunMode,
     /// Helper profile for subagent surfaces (None for main agent)
     pub helper_profile: Option<&'a SubagentProfile>,
-    /// Custom subagent slug for CustomSubagentBody source
+    /// Custom subagent slug for SubagentBody source
     pub custom_subagent_slug: Option<&'a str>,
     /// Override response language for surfaces that don't carry raw_plan
     /// (Compaction / Title). Falls back to raw_plan.response_language when None.

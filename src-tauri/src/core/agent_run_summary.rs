@@ -60,6 +60,14 @@ pub(crate) fn extract_run_model_refs(
     )
 }
 
+/// Phase 6: User message constructor for implementation handoff after plan approval.
+///
+/// This function does NOT duplicate ProfileInstructions text (response language/style)
+/// because those are already injected into the system prompt by the Composer.
+/// If future changes require response language/style in this user message, use
+/// `Composer::render_section_only(SectionId::ProfileInstructions, …)` to obtain
+/// the same text fragment rather than hardcoding a parallel copy.
+/// See docs/prompt-injection-refactor.md § 3.21.
 pub(crate) fn build_implementation_handoff_prompt(
     thread_id: &str,
     metadata: &PlanMessageMetadata,
@@ -102,9 +110,7 @@ pub(crate) fn primary_summary_model(
     model_plan.primary.model.clone()
 }
 
-pub(crate) async fn build_compact_summary_system_prompt(
-    response_language: Option<&str>,
-) -> String {
+pub(crate) async fn build_compact_summary_system_prompt(response_language: Option<&str>) -> String {
     // Phase 6: sourced from the Composer's CompactionContract source via
     // `render_section_only`. Output is byte-equal to the legacy inline string.
     build_compaction_system_prompt(
@@ -126,8 +132,8 @@ async fn build_compaction_system_prompt(
     };
     use std::sync::Arc;
 
-    let placeholder_pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:")
-        .expect("placeholder pool");
+    let placeholder_pool =
+        sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("placeholder pool");
     let registry = Arc::new(crate::core::prompt::registry::default_registry());
     let composer = Composer::new(
         registry,
@@ -347,9 +353,7 @@ pub(crate) fn cancellation_error() -> AppError {
     )
 }
 
-pub(crate) async fn build_merge_summary_system_prompt(
-    response_language: Option<&str>,
-) -> String {
+pub(crate) async fn build_merge_summary_system_prompt(response_language: Option<&str>) -> String {
     // Phase 6: sourced from the Composer's CompactionContract source.
     build_compaction_system_prompt(
         crate::core::prompt::CompactionKind::Merge,

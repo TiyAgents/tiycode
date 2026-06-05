@@ -910,34 +910,12 @@ async fn build_helper_system_prompt(
     let budget = PromptBudget::default();
     let composed = composer.build(&surface, &cx, &budget).await?;
 
-    let helper_shell_tooling_guide = helper_shell_tooling_guide(helper_profile);
-    let helper_body = helper_profile.system_prompt();
-
-    Ok(format!(
-        "{}\n\n{}\n\n{}",
-        composed.text, helper_shell_tooling_guide, helper_body
-    ))
+    // Phase 7: Subagent body (identity + persona + shell tooling guide)
+    // is now rendered entirely by SubagentBodySource via the Composer.
+    // Legacy helper_shell_tooling_guide() and SubagentProfile::system_prompt()
+    // calls are removed.
+    Ok(composed.text)
 }
-
-fn helper_shell_tooling_guide(helper_profile: &SubagentProfile) -> &'static str {
-    match helper_profile {
-        SubagentProfile::Explore => {
-            "## Shell Tooling Guide\n- This helper does not have `shell`, `edit`, or Terminal panel control tools.\n- Use the workspace-aware tools you actually have: `read`, `list`, `find`, and `search`.\n- Prefer `find` to locate likely files, `search` to locate relevant text or symbols, and `read` to inspect exact implementation details.\n- `search` defaults to literal matching. Set `queryMode` to `regex` only when you intentionally need regular expressions."
-        }
-        SubagentProfile::Review => {
-            "## Shell Tooling Guide\n- This helper may use `read`, `list`, `find`, `search`, `term_status`, `term_output`, and `shell`.\n- Use `shell` only for non-interactive diagnostic and verification commands in the workspace, such as type-checks, test suites, diffs, or other read-only inspection.\n- `term_status` and `term_output` refer only to the desktop app's embedded Terminal panel for the current thread.\n- This helper does not have `edit`, `term_write`, `term_restart`, or `term_close`."
-        }
-        SubagentProfile::Custom { .. } => {
-            "## Shell Tooling Guide\n- Use only the tools available to you as configured by the user.\n- Follow tool-use protocol strictly: verify required fields before calling."
-        }
-    }
-}
-
-// Phase 2b: legacy string-parsing functions removed.
-// `collect_prompt_sections` / `inherited_helper_prompt_sections` /
-// `is_helper_inherited_section` / HELPER_INHERITED_SECTION_TITLES were replaced
-// by the Composer-based subagent surface rendering above. See
-// docs/prompt-injection-refactor.md § 1.4 / § 4 阶段 2.
 
 fn take_escalation_summary(summary: &Arc<StdMutex<Option<String>>>) -> Option<String> {
     summary.lock().ok().and_then(|mut slot| slot.take())
@@ -988,28 +966,6 @@ mod tests {
     use super::*;
     use crate::core::subagent::SubagentProfile;
     use std::sync::Arc;
-
-    #[test]
-    fn explore_helper_shell_guide_only_mentions_read_only_tools() {
-        let prompt = helper_shell_tooling_guide(&SubagentProfile::Explore);
-        assert!(prompt
-            .contains("This helper does not have `shell`, `edit`, or Terminal panel control tools."));
-        assert!(prompt.contains("`read`, `list`, `find`, and `search`"));
-        assert!(prompt.contains("`search` defaults to literal matching."));
-        assert!(!prompt.contains("`term_write`"));
-        assert!(!prompt.contains("`term_restart`"));
-        assert!(!prompt.contains("`term_close`"));
-    }
-
-    #[test]
-    fn review_helper_shell_guide_matches_review_tool_whitelist() {
-        let prompt = helper_shell_tooling_guide(&SubagentProfile::Review);
-        assert!(prompt.contains("`term_status`, `term_output`, and `shell`"));
-        assert!(
-            prompt.contains("does not have `edit`, `term_write`, `term_restart`, or `term_close`")
-        );
-        assert!(!prompt.contains("This helper may use `term_write`"));
-    }
 
     #[test]
     fn finalize_helper_summary_renders_review_json() {

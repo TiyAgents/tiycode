@@ -55,7 +55,7 @@ pub const SUBAGENT_INHERITED_SECTIONS: &[(SubagentSurfaceKind, &[SectionId])] = 
             SectionId::ProjectContext,
             SectionId::ProfileInstructions,
             SectionId::WorkspaceLocation,
-            SectionId::CustomSubagentBody,
+            SectionId::SubagentBody,
             SectionId::SubagentOutputContract,
         ],
     ),

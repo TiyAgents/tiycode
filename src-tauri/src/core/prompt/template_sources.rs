@@ -76,7 +76,10 @@ impl SectionSource for SandboxPermissionsSource {
 
         let raw = load_template(TEMPLATE_REL_PATH, TEMPLATE_EMBEDDED);
         let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
-            FatalError::new(codes::TEMPLATE_NOT_FOUND, format!("{}: {}", TEMPLATE_REL_PATH, e))
+            FatalError::new(
+                codes::TEMPLATE_NOT_FOUND,
+                format!("{}: {}", TEMPLATE_REL_PATH, e),
+            )
         })?;
 
         let vars = TemplateVars::new()
@@ -86,7 +89,10 @@ impl SectionSource for SandboxPermissionsSource {
             .insert("writable_roots_line", writable_roots_line);
 
         let rendered = render_template_strict(&body, DECLARED_KEYS, &vars).map_err(|e| {
-            FatalError::new(codes::TEMPLATE_MISSING_KEY, format!("{}: {}", TEMPLATE_REL_PATH, e))
+            FatalError::new(
+                codes::TEMPLATE_MISSING_KEY,
+                format!("{}: {}", TEMPLATE_REL_PATH, e),
+            )
         })?;
 
         Ok(SectionOutcome::Produced(SectionBody {
@@ -249,12 +255,13 @@ impl SectionSource for ProjectContextSource {
             .insert_user_text("content", snippet.content)
             .insert("truncated_marker", truncated_marker);
 
-        let rendered = render_template_strict(&body, PROJCTX_DECLARED_KEYS, &vars).map_err(|e| {
-            FatalError::new(
-                codes::TEMPLATE_MISSING_KEY,
-                format!("{}: {}", PROJCTX_TEMPLATE_REL_PATH, e),
-            )
-        })?;
+        let rendered =
+            render_template_strict(&body, PROJCTX_DECLARED_KEYS, &vars).map_err(|e| {
+                FatalError::new(
+                    codes::TEMPLATE_MISSING_KEY,
+                    format!("{}: {}", PROJCTX_TEMPLATE_REL_PATH, e),
+                )
+            })?;
         Ok(SectionOutcome::Produced(SectionBody {
             markdown: rendered.trim_end().to_string(),
             meta: SectionMeta {
@@ -353,9 +360,10 @@ impl SectionSource for RunModeSource {
             crate::core::subagent::TERM_PANEL_USAGE_NOTE,
         );
 
-        let rendered = render_template_strict(&body, RUN_MODE_DECLARED_KEYS, &vars).map_err(|e| {
-            FatalError::new(codes::TEMPLATE_MISSING_KEY, format!("{}: {}", rel_path, e))
-        })?;
+        let rendered =
+            render_template_strict(&body, RUN_MODE_DECLARED_KEYS, &vars).map_err(|e| {
+                FatalError::new(codes::TEMPLATE_MISSING_KEY, format!("{}: {}", rel_path, e))
+            })?;
 
         // Cow wraps the const &'static str — clone if borrowed
         let _ = Cow::Borrowed(rel_path);

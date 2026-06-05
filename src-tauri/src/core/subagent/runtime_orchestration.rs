@@ -303,6 +303,10 @@ impl SubagentProfile {
         }
     }
 
+    /// Phase 7: Subagent body is now rendered by SubagentBodySource via the Composer.
+    /// This method is retained only for backward-compat tests; production code
+    /// should use `Composer::build` with the appropriate `PromptSurface`.
+    /// See docs/prompt-injection-refactor.md § 4 阶段 7.
     pub fn system_prompt(&self) -> String {
         match self {
             Self::Explore => {

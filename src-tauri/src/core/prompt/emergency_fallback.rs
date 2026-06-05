@@ -43,7 +43,7 @@ pub fn critical_sections(surface: &PromptSurface) -> &'static [SectionId] {
         }
         PromptSurface::SubagentCustom { .. } => &[
             SectionId::Role,
-            SectionId::CustomSubagentBody,
+            SectionId::SubagentBody,
             SectionId::SubagentOutputContract,
         ],
         PromptSurface::Compaction { .. } => &[SectionId::Role, SectionId::CompactionContract],

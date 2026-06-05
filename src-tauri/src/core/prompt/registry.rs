@@ -3,19 +3,16 @@ use std::borrow::Cow;
 use super::active_goal_source::ActiveGoalSource;
 use super::layer::{LayerResolver, PromptLayer, SectionAnchor, SectionOrder};
 use super::legacy_adapter::{
-    LegacyCompactionContractSource,
-    LegacyCustomSubagentBodySource,
-    LegacyProfileInstructionsSource,
-    LegacySkillsSource, LegacySubagentOutputContractSource,
-    LegacyTitleContractSource,
+    LegacyCompactionContractSource, LegacyProfileInstructionsSource, LegacySkillsSource,
+    LegacySubagentOutputContractSource, LegacyTitleContractSource, SubagentBodySource,
 };
 use super::providers::{ProfileProvider, SkillsProvider};
 use super::section_id::SectionId;
 use super::section_source::SectionSpec;
 use super::surface::{PromptSurface, SurfaceMatcher, SurfacePattern};
 use super::template_sources::{
-    ProjectContextSource, RunModeSource, SandboxPermissionsSource,
-    SystemEnvironmentSource, WorkspaceLocationSource,
+    ProjectContextSource, RunModeSource, SandboxPermissionsSource, SystemEnvironmentSource,
+    WorkspaceLocationSource,
 };
 use super::templates::{TemplateSource, TemplateVars};
 
@@ -76,7 +73,7 @@ impl SectionRegistry {
 /// Byte-equal layer mapping: Core→StablePrefix, Capability+WorkspacePreference→SessionStable,
 /// RuntimeContext→RuntimeOverlay. This preserves the old (phase, order_in_phase) ordering.
 pub fn default_registry() -> SectionRegistry {
-    let mut registry = SectionRegistry::new(1);
+    let mut registry = SectionRegistry::new(2);
 
     // ── StablePrefix (was Core) ──────────────────────────────────────
     registry.register(SectionSpec {
@@ -272,14 +269,16 @@ pub fn default_registry() -> SectionRegistry {
     });
 
     registry.register(SectionSpec {
-        id: SectionId::CustomSubagentBody,
-        title: Cow::Borrowed("Custom Subagent Body"),
+        id: SectionId::SubagentBody,
+        title: Cow::Borrowed("Subagent Body"),
         layer: LayerResolver::Fixed(PromptLayer::StablePrefix),
         order_hint: SectionOrder::Anchored(SectionAnchor::After(SectionId::SubagentOutputContract)),
-        surfaces: SurfaceMatcher::Any(vec![SurfacePattern::CustomSubagent]),
+        surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnySubagent]),
         version: 1,
-        max_chars: None,
-        source: Box::new(LegacyCustomSubagentBodySource),
+        // Custom subagent prompts can be arbitrarily long; 50 KB leaves
+        // generous headroom while still bounding worst-case system prompt size.
+        max_chars: Some(50_000),
+        source: Box::new(SubagentBodySource),
     });
 
     // ── Ephemeral ────────────────────────────────────────────────────
@@ -332,7 +331,7 @@ mod tests {
     fn registry_has_all_16_sections() {
         let reg = default_registry();
         assert_eq!(reg.sections.len(), 16);
-        assert_eq!(reg.schema_version(), 1);
+        assert_eq!(reg.schema_version(), 2);
     }
 
     #[test]
@@ -366,11 +365,139 @@ mod tests {
     }
 
     #[test]
+    fn all_surfaces_have_sections() {
+        // Verify every PromptSurface variant has a non-empty section list
+        // in the default registry. This acts as a snapshot guard: adding a
+        // new surface without declaring any sections will fail here.
+
+        let reg = default_registry();
+        let surfaces: Vec<PromptSurface> = vec![
+            PromptSurface::MainAgent {
+                run_mode: super::super::run_mode::RunMode::Default,
+            },
+            PromptSurface::MainAgent {
+                run_mode: super::super::run_mode::RunMode::Plan,
+            },
+            PromptSurface::SubagentExplore {
+                inherited_run_mode: super::super::run_mode::RunMode::Default,
+            },
+            PromptSurface::SubagentReview {
+                inherited_run_mode: super::super::run_mode::RunMode::Default,
+            },
+            PromptSurface::SubagentCustom {
+                slug: "test-slug".to_string(),
+                inherited_run_mode: super::super::run_mode::RunMode::Default,
+                cache_stability: super::super::surface::SubagentCacheStability::Volatile,
+            },
+            PromptSurface::Compaction {
+                kind: super::super::surface::CompactionKind::Compact,
+            },
+            PromptSurface::Compaction {
+                kind: super::super::surface::CompactionKind::Merge,
+            },
+            PromptSurface::Title,
+        ];
+
+        for surface in &surfaces {
+            let sections = reg.filter_for_surface(surface);
+            assert!(
+                !sections.is_empty(),
+                "surface {:?} should have at least one section",
+                surface
+            );
+        }
+    }
+
+    #[test]
+    fn main_agent_sections_are_deterministic() {
+        let reg = default_registry();
+        let sections = reg.filter_for_surface(&PromptSurface::MainAgent {
+            run_mode: super::super::run_mode::RunMode::Default,
+        });
+
+        // Snapshot: main agent surface should include these sections
+        let ids: Vec<SectionId> = sections.iter().map(|s| s.id.clone()).collect();
+
+        // Core sections must always be present
+        assert!(ids.contains(&SectionId::Role), "MainAgent must have Role");
+        assert!(
+            ids.contains(&SectionId::BehavioralGuidelines),
+            "MainAgent must have BehavioralGuidelines"
+        );
+        assert!(
+            ids.contains(&SectionId::FinalResponseStructure),
+            "MainAgent must have FinalResponseStructure"
+        );
+        assert!(
+            ids.contains(&SectionId::ShellToolingGuide),
+            "MainAgent must have ShellToolingGuide"
+        );
+
+        // Dynamic sections
+        assert!(ids.contains(&SectionId::ProjectContext));
+        assert!(ids.contains(&SectionId::ProfileInstructions));
+        assert!(ids.contains(&SectionId::SystemEnvironment));
+        assert!(ids.contains(&SectionId::WorkspaceLocation));
+        assert!(ids.contains(&SectionId::ActiveGoal));
+
+        // Subagent-specific sections should NOT be in MainAgent
+        assert!(
+            !ids.contains(&SectionId::SubagentOutputContract),
+            "SubagentOutputContract must not appear on MainAgent"
+        );
+        assert!(
+            !ids.contains(&SectionId::SubagentBody),
+            "SubagentBody must not appear on MainAgent"
+        );
+    }
+
+    #[test]
+    fn subagent_sections_include_body_and_output_contract() {
+        let reg = default_registry();
+
+        for surface in &[
+            PromptSurface::SubagentExplore {
+                inherited_run_mode: super::super::run_mode::RunMode::Default,
+            },
+            PromptSurface::SubagentReview {
+                inherited_run_mode: super::super::run_mode::RunMode::Default,
+            },
+            PromptSurface::SubagentCustom {
+                slug: "test-slug".to_string(),
+                inherited_run_mode: super::super::run_mode::RunMode::Default,
+                cache_stability: super::super::surface::SubagentCacheStability::Volatile,
+            },
+        ] {
+            let ids: Vec<SectionId> = reg
+                .filter_for_surface(surface)
+                .iter()
+                .map(|s| s.id.clone())
+                .collect();
+
+            assert!(
+                ids.contains(&SectionId::SubagentOutputContract),
+                "{:?} must have SubagentOutputContract",
+                surface
+            );
+            assert!(
+                ids.contains(&SectionId::SubagentBody),
+                "{:?} must have SubagentBody",
+                surface
+            );
+            assert!(
+                ids.contains(&SectionId::Role),
+                "{:?} must have Role for identity",
+                surface
+            );
+        }
+    }
+
+    #[test]
     fn schema_version_monotonic() {
         // L1 hard-floor: schema_version must never go below the recorded baseline.
         // Bump BASELINE_SCHEMA_VERSION every time you bump default_registry().schema_version
         // per the rules in docs/prompt-injection-refactor.md § 3.19.
-        const BASELINE_SCHEMA_VERSION: u32 = 1;
+        const BASELINE_SCHEMA_VERSION: u32 = 2;
 
         let reg = default_registry();
         assert!(

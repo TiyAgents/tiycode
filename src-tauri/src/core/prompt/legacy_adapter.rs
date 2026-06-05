@@ -6,7 +6,7 @@ use super::build_context::BuildCx;
 use super::context::PromptBuildContext;
 use super::providers::{BaseProvider, ProfileProvider, SkillsProvider};
 use super::section::PromptSectionProvider;
-use super::section_source::{FatalError, SectionBody, SectionOutcome, SectionSource};
+use super::section_source::{FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource};
 
 // ---------------------------------------------------------------------------
 // Legacy adapter wrappers retained for sections that still depend on dynamic
@@ -101,21 +101,73 @@ impl SectionSource for LegacySubagentOutputContractSource {
     }
 }
 
-pub struct LegacyCustomSubagentBodySource;
+// ── SubagentBodySource (replaces LegacyCustomSubagentBodySource) ──
+//
+// Phase 7: Subagent body is now a proper SectionSource. For built-in
+// Explore/Review surfaces, loads templates/subagent/{explore,review}.md.
+// For Custom surfaces, returns the user-provided system_prompt.
+// The legacy per-variant hardcoded strings in SubagentProfile::system_prompt()
+// are retained only for backward-compat tests.
+
+pub struct SubagentBodySource;
 
 #[async_trait]
-impl SectionSource for LegacyCustomSubagentBodySource {
+impl SectionSource for SubagentBodySource {
+    fn source_kind(&self) -> &'static str {
+        "subagent_body"
+    }
+
     async fn build(&self, cx: &BuildCx<'_>) -> Result<SectionOutcome, FatalError> {
-        let system_prompt = match cx.helper_profile {
-            Some(SubagentProfile::Custom { system_prompt, .. }) => system_prompt.as_str(),
-            _ => return Ok(SectionOutcome::Skip),
-        };
-        if system_prompt.trim().is_empty() {
-            return Ok(SectionOutcome::Skip);
+        match cx.helper_profile {
+            Some(SubagentProfile::Explore) => {
+                let template = include_str!("templates/subagent/explore.md");
+                let (_tmpl, body) =
+                    super::templates::parse_front_matter(template).map_err(|e| {
+                        FatalError::new("template.parse", format!("subagent/explore.md: {e}"))
+                    })?;
+                // No template vars needed for static persona prompts
+                let vars = super::templates::TemplateVars::new();
+                let rendered = super::templates::render_template_strict(&body, &[], &vars)
+                    .map_err(|e| {
+                        FatalError::new("template.render", format!("subagent/explore.md: {e}"))
+                    })?;
+                Ok(SectionOutcome::Produced(SectionBody {
+                    markdown: rendered,
+                    meta: SectionMeta {
+                        template_path: Some("templates/subagent/explore.md"),
+                        ..Default::default()
+                    },
+                }))
+            }
+            Some(SubagentProfile::Review) => {
+                let template = include_str!("templates/subagent/review.md");
+                let (_tmpl, body) =
+                    super::templates::parse_front_matter(template).map_err(|e| {
+                        FatalError::new("template.parse", format!("subagent/review.md: {e}"))
+                    })?;
+                let vars = super::templates::TemplateVars::new();
+                let rendered = super::templates::render_template_strict(&body, &[], &vars)
+                    .map_err(|e| {
+                        FatalError::new("template.render", format!("subagent/review.md: {e}"))
+                    })?;
+                Ok(SectionOutcome::Produced(SectionBody {
+                    markdown: rendered,
+                    meta: SectionMeta {
+                        template_path: Some("templates/subagent/review.md"),
+                        ..Default::default()
+                    },
+                }))
+            }
+            Some(SubagentProfile::Custom { system_prompt, .. }) => {
+                if system_prompt.trim().is_empty() {
+                    return Ok(SectionOutcome::Skip);
+                }
+                Ok(SectionOutcome::Produced(SectionBody::markdown(
+                    system_prompt,
+                )))
+            }
+            None => Ok(SectionOutcome::Skip),
         }
-        Ok(SectionOutcome::Produced(SectionBody::markdown(
-            system_prompt,
-        )))
     }
 }
 

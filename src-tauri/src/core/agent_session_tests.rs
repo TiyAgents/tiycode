@@ -5024,19 +5024,13 @@ Used for prompt assembly coverage.
         let workspace_path = workspace_root.to_string_lossy();
 
         // Legacy assembler output
-        let legacy_prompt = assembler::build_system_prompt(
-            &pool,
-            &raw_plan,
-            &workspace_path,
-            "default",
-        )
-        .await
-        .expect("legacy prompt");
+        let legacy_prompt =
+            assembler::build_system_prompt(&pool, &raw_plan, &workspace_path, "default")
+                .await
+                .expect("legacy prompt");
 
         // Composer legacy compat output
-        let registry = Arc::new(
-            crate::core::prompt::registry::default_registry(),
-        );
+        let registry = Arc::new(crate::core::prompt::registry::default_registry());
         let composer = Composer::new(
             registry,
             SourceExecPolicy::default(),

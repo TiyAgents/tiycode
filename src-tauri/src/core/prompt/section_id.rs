@@ -30,8 +30,10 @@ pub enum SectionId {
     ActivePlan,
     /// Output contract for subagent surfaces
     SubagentOutputContract,
-    /// User-provided custom subagent system prompt body
-    CustomSubagentBody,
+    /// Subagent body (identity + persona instructions), replaces
+    /// the per-variant hardcoded strings in SubagentProfile::system_prompt().
+    /// For built-in Explore/Review loads templates; for Custom returns user prompt.
+    SubagentBody,
     /// Compaction instructions for summary generation
     CompactionContract,
     /// Title generation instructions

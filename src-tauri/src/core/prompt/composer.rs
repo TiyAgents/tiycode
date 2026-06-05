@@ -21,9 +21,7 @@ use super::renderer::{MarkdownRenderer, SectionRenderer};
 use super::run_mode::RunMode;
 use super::section::PromptPhase;
 use super::section_id::SectionId;
-use super::section_source::{
-    SectionBody, SectionOutcome, SectionSpec,
-};
+use super::section_source::{SectionBody, SectionOutcome, SectionSpec};
 use super::signals::SignalCache;
 use super::surface::PromptSurface;
 use super::templates::{HeuristicTokenizer, Tokenizer};
@@ -85,8 +83,12 @@ impl Composer {
 
         // Step 2+3: Build sections + resolve layers (sequential build with per-source timeout;
         // concurrent fan-out within a layer is deferred to a future phase)
-        let mut results: Vec<(&SectionSpec, PromptLayer, SectionOutcome, std::time::Duration)> =
-            Vec::new();
+        let mut results: Vec<(
+            &SectionSpec,
+            PromptLayer,
+            SectionOutcome,
+            std::time::Duration,
+        )> = Vec::new();
         let mut soft_failed_ids: Vec<SectionId> = Vec::new();
 
         for spec in &specs {
@@ -94,32 +96,31 @@ impl Composer {
             let source_start = Instant::now();
 
             let build_fut = spec.source.build(cx);
-            let outcome =
-                match timeout(self.exec_policy.per_source_timeout, build_fut).await {
-                    Ok(Ok(outcome)) => outcome,
-                    Ok(Err(fatal)) => SectionOutcome::SoftFailed {
-                        code: "source.fatal",
+            let outcome = match timeout(self.exec_policy.per_source_timeout, build_fut).await {
+                Ok(Ok(outcome)) => outcome,
+                Ok(Err(fatal)) => SectionOutcome::SoftFailed {
+                    code: "source.fatal",
+                    error: Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        fatal.message,
+                    )),
+                },
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        target = "prompt.source.timeout",
+                        section = ?spec.id,
+                        timeout_ms = self.exec_policy.per_source_timeout.as_millis() as u64,
+                        "section source timed out"
+                    );
+                    SectionOutcome::SoftFailed {
+                        code: super::error_codes::codes::SOURCE_TIMEOUT,
                         error: Box::new(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            fatal.message,
+                            std::io::ErrorKind::TimedOut,
+                            "section source timeout",
                         )),
-                    },
-                    Err(_elapsed) => {
-                        tracing::warn!(
-                            target = "prompt.source.timeout",
-                            section = ?spec.id,
-                            timeout_ms = self.exec_policy.per_source_timeout.as_millis() as u64,
-                            "section source timed out"
-                        );
-                        SectionOutcome::SoftFailed {
-                            code: super::error_codes::codes::SOURCE_TIMEOUT,
-                            error: Box::new(std::io::Error::new(
-                                std::io::ErrorKind::TimedOut,
-                                "section source timeout",
-                            )),
-                        }
                     }
-                };
+                }
+            };
 
             // Track SoftFailed sections for critical-section check
             if matches!(outcome, SectionOutcome::SoftFailed { .. }) {
@@ -162,7 +163,8 @@ impl Composer {
                     bodies.push((spec, layer, body, Some(merged_warning), elapsed));
                 }
                 SectionOutcome::Skip => { /* silently skip */ }
-                SectionOutcome::SoftFailed { .. } => { /* silently skip, tracked in soft_failed_ids */ }
+                SectionOutcome::SoftFailed { .. } => { /* silently skip, tracked in soft_failed_ids */
+                }
             }
         }
 
@@ -471,7 +473,10 @@ impl Composer {
     /// 3. Up to 2 markers (system reserves 2 of the 4 Anthropic breakpoints).
     /// 4. Skip Ephemeral layer (by definition unstable).
     /// 5. Skip layers below `min_marker_chars`.
-    fn assign_cache_markers(blocks: &mut [PromptBlock], target: &super::build_context::ModelTarget) {
+    fn assign_cache_markers(
+        blocks: &mut [PromptBlock],
+        target: &super::build_context::ModelTarget,
+    ) {
         if !target.supports_cache_control() {
             return;
         }
@@ -525,7 +530,7 @@ fn legacy_phase_order(id: &SectionId) -> (PromptPhase, u16) {
         SectionId::RunMode => (PromptPhase::RuntimeContext, 30),
         SectionId::WorkspaceLocation => (PromptPhase::RuntimeContext, 40),
         SectionId::SubagentOutputContract => (PromptPhase::Core, 35),
-        SectionId::CustomSubagentBody => (PromptPhase::Core, 5),
+        SectionId::SubagentBody => (PromptPhase::Core, 5),
         SectionId::ActiveGoal => (PromptPhase::RuntimeContext, 999), // Ephemeral, after everything
         SectionId::ActivePlan => (PromptPhase::RuntimeContext, 999),
         _ => (PromptPhase::RuntimeContext, 999),
@@ -534,8 +539,8 @@ fn legacy_phase_order(id: &SectionId) -> (PromptPhase, u16) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::build_context::ModelTarget;
+    use super::*;
 
     #[test]
     fn cache_purity_stable_prefix_omits_dates_and_ids() {

@@ -454,7 +454,10 @@ mod tests {
         assert!(body.contains("- Operating system:"));
         assert!(body.contains("- Architecture:"));
         assert!(body.contains("- Default shell:"));
-        assert!(!body.contains("Current date:"), "current_date must not appear in system prompt; it is injected via CurrentDateInjector");
+        assert!(
+            !body.contains("Current date:"),
+            "current_date must not appear in system prompt; it is injected via CurrentDateInjector"
+        );
         assert!(!body.contains("Common CLI tools"));
     }
 

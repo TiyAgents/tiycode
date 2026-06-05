@@ -266,8 +266,8 @@ async fn build_title_system_prompt() -> String {
     };
     use std::sync::Arc;
 
-    let placeholder_pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:")
-        .expect("placeholder pool");
+    let placeholder_pool =
+        sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("placeholder pool");
     let registry = Arc::new(crate::core::prompt::registry::default_registry());
     let composer = Composer::new(
         registry,

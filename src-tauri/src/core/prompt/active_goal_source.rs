@@ -29,7 +29,9 @@ impl SectionSource for ActiveGoalSource {
 
         let goal = goal_repo::find_by_thread_id(cx.pool, thread_id)
             .await
-            .map_err(|e| FatalError::new(super::error_codes::codes::GOAL_LOAD_FAILED, e.to_string()))?;
+            .map_err(|e| {
+                FatalError::new(super::error_codes::codes::GOAL_LOAD_FAILED, e.to_string())
+            })?;
 
         let goal = match goal {
             Some(g) if g.status == GoalStatus::Active => g,
