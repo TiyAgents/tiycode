@@ -211,10 +211,10 @@ pub(crate) async fn generate_thread_title(
     })?;
 
     let prompt = build_title_prompt_from_messages(messages, response_language, response_style);
+    // Phase 6: title system prompt sourced via Composer (PromptSurface::Title).
+    let title_system_prompt = build_title_system_prompt().await;
     let context = TiyContext {
-        system_prompt: Some(
-            "You write concise conversation titles. Return only the title text.".to_string(),
-        ),
+        system_prompt: Some(title_system_prompt),
         messages: vec![TiyMessage::User(UserMessage::text(prompt))],
         tools: None,
     };
@@ -256,6 +256,50 @@ pub(crate) async fn generate_thread_title(
     }
 
     Ok(normalize_generated_title(&message.text_content()))
+}
+
+/// Build the Title surface system prompt via Composer (Phase 6).
+async fn build_title_system_prompt() -> String {
+    use crate::core::prompt::{
+        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptFeatureSet,
+        PromptSurface, RunMode, SectionId, SignalCache, SourceExecPolicy, SystemClock,
+    };
+    use std::sync::Arc;
+
+    let placeholder_pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:")
+        .expect("placeholder pool");
+    let registry = Arc::new(crate::core::prompt::registry::default_registry());
+    let composer = Composer::new(
+        registry,
+        SourceExecPolicy::default(),
+        Arc::new(NoopRedactor),
+    );
+    let cx = BuildCx {
+        pool: &placeholder_pool,
+        workspace_path: "",
+        thread_id: None,
+        run_id: None,
+        raw_plan: None,
+        run_mode: RunMode::Default,
+        helper_profile: None,
+        custom_subagent_slug: None,
+        response_language: None,
+        target_model: ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: false,
+        },
+        clock: Arc::new(SystemClock),
+        signals: Arc::new(SignalCache::new()),
+        features: Arc::new(PromptFeatureSet::empty()),
+        renderer: Arc::new(MarkdownRenderer),
+    };
+    composer
+        .render_section_only(&SectionId::TitleContract, &PromptSurface::Title, &cx)
+        .await
+        .map(|b| b.markdown)
+        .unwrap_or_else(|| {
+            "You write concise conversation titles. Return only the title text.".to_string()
+        })
 }
 
 pub(crate) fn build_title_prompt_from_messages(

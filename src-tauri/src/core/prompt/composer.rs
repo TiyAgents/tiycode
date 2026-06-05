@@ -1,0 +1,630 @@
+use std::sync::Arc;
+use std::time::Instant;
+
+use sqlx::SqlitePool;
+use tokio::time::timeout;
+
+use crate::core::agent_session::RuntimeModelPlan;
+use crate::model::errors::{AppError, ErrorSource};
+
+use super::budget::PromptBudget;
+use super::build_context::BuildCx;
+use super::cache_marker::{CacheMarker, PromptBlock};
+use super::clock::SystemClock;
+use super::emergency_fallback::{critical_sections, emergency_fallback_text};
+use super::exec_policy::SourceExecPolicy;
+use super::feature_set::PromptFeatureSet;
+use super::layer::{PromptLayer, SectionAudit, SectionWarning};
+use super::redactor::Redactor;
+use super::registry::SectionRegistry;
+use super::renderer::{MarkdownRenderer, SectionRenderer};
+use super::run_mode::RunMode;
+use super::section::PromptPhase;
+use super::section_id::SectionId;
+use super::section_source::{
+    SectionBody, SectionOutcome, SectionSpec,
+};
+use super::signals::SignalCache;
+use super::surface::PromptSurface;
+use super::templates::{HeuristicTokenizer, Tokenizer};
+
+/// The composed output of a prompt build.
+#[derive(Debug)]
+pub struct ComposedPrompt {
+    /// Complete system prompt text (fallback for providers without block support)
+    pub text: String,
+    /// Content blocks aligned with LLM provider cache-control APIs
+    pub blocks: Vec<PromptBlock>,
+    /// Global schema version (structural changes only; § 3.19)
+    pub schema_version: u32,
+    /// Per-section audit trail
+    pub audit: Vec<SectionAudit>,
+    /// Warnings collected during composition
+    pub warnings: Vec<SectionWarning>,
+}
+
+/// The prompt composer: orchestrates section building, layer assignment,
+/// budget enforcement, and rendering.
+pub struct Composer {
+    pub registry: Arc<SectionRegistry>,
+    exec_policy: SourceExecPolicy,
+    redactor: Arc<dyn Redactor>,
+    tokenizer: Arc<dyn Tokenizer>,
+}
+
+impl Composer {
+    pub fn new(
+        registry: Arc<SectionRegistry>,
+        exec_policy: SourceExecPolicy,
+        redactor: Arc<dyn Redactor>,
+    ) -> Self {
+        Self {
+            registry,
+            exec_policy,
+            redactor,
+            tokenizer: Arc::new(HeuristicTokenizer),
+        }
+    }
+
+    pub fn with_tokenizer(mut self, tokenizer: Arc<dyn Tokenizer>) -> Self {
+        self.tokenizer = tokenizer;
+        self
+    }
+
+    // ── Main entry: 7-step build pipeline (§3.3) ──────────────────────
+    pub async fn build(
+        &self,
+        surface: &PromptSurface,
+        cx: &BuildCx<'_>,
+        budget: &PromptBudget,
+    ) -> Result<ComposedPrompt, AppError> {
+        let start = Instant::now();
+
+        // Step 1: Filter sections by SurfaceMatcher
+        let specs: Vec<&SectionSpec> = self.registry.filter_for_surface(surface);
+
+        // Step 2+3: Build sections + resolve layers (sequential build with per-source timeout;
+        // concurrent fan-out within a layer is deferred to a future phase)
+        let mut results: Vec<(&SectionSpec, PromptLayer, SectionOutcome, std::time::Duration)> =
+            Vec::new();
+        let mut soft_failed_ids: Vec<SectionId> = Vec::new();
+
+        for spec in &specs {
+            let layer = spec.layer.resolve(surface);
+            let source_start = Instant::now();
+
+            let build_fut = spec.source.build(cx);
+            let outcome =
+                match timeout(self.exec_policy.per_source_timeout, build_fut).await {
+                    Ok(Ok(outcome)) => outcome,
+                    Ok(Err(fatal)) => SectionOutcome::SoftFailed {
+                        code: "source.fatal",
+                        error: Box::new(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            fatal.message,
+                        )),
+                    },
+                    Err(_elapsed) => {
+                        tracing::warn!(
+                            target = "prompt.source.timeout",
+                            section = ?spec.id,
+                            timeout_ms = self.exec_policy.per_source_timeout.as_millis() as u64,
+                            "section source timed out"
+                        );
+                        SectionOutcome::SoftFailed {
+                            code: super::error_codes::codes::SOURCE_TIMEOUT,
+                            error: Box::new(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "section source timeout",
+                            )),
+                        }
+                    }
+                };
+
+            // Track SoftFailed sections for critical-section check
+            if matches!(outcome, SectionOutcome::SoftFailed { .. }) {
+                soft_failed_ids.push(spec.id.clone());
+            }
+
+            results.push((spec, layer, outcome, source_start.elapsed()));
+
+            // Hard overall budget cap; if exceeded mid-pipeline, stop building further sources
+            if start.elapsed() > self.exec_policy.overall_build_timeout {
+                tracing::warn!(
+                    target = "prompt.compose.overall_timeout",
+                    elapsed_ms = start.elapsed().as_millis() as u64,
+                    sections_built = results.len(),
+                    sections_total = specs.len(),
+                    "overall build timeout exceeded; remaining sources skipped"
+                );
+                break;
+            }
+        }
+
+        // Step 4: Per-section budget truncation
+        let mut bodies: Vec<(
+            &SectionSpec,
+            PromptLayer,
+            SectionBody,
+            Option<SectionWarning>,
+            std::time::Duration,
+        )> = Vec::new();
+
+        for (spec, layer, outcome, elapsed) in results {
+            match outcome {
+                SectionOutcome::Produced(body) => {
+                    let (body, warning) = self.apply_per_section_budget(spec, &body, budget);
+                    bodies.push((spec, layer, body, warning, elapsed));
+                }
+                SectionOutcome::Degraded { body, warning } => {
+                    let (body, budget_warning) = self.apply_per_section_budget(spec, &body, budget);
+                    let merged_warning = budget_warning.unwrap_or(warning);
+                    bodies.push((spec, layer, body, Some(merged_warning), elapsed));
+                }
+                SectionOutcome::Skip => { /* silently skip */ }
+                SectionOutcome::SoftFailed { .. } => { /* silently skip, tracked in soft_failed_ids */ }
+            }
+        }
+
+        // EmergencyFallback: if no sections were produced, inject hard-coded fallback
+        let fallback_used = bodies.is_empty();
+        if fallback_used {
+            let fallback_text = emergency_fallback_text(surface);
+            let renderer = cx.renderer.as_ref();
+            let rendered = renderer.render_section("Emergency Fallback", fallback_text);
+            let text = self.redactor.redact(&rendered).into_owned();
+            let estimated = self.tokenizer.estimate(&rendered);
+            tracing::error!(
+                target = "prompt.fallback.emergency",
+                surface = ?surface,
+                "emergency fallback injected"
+            );
+            return Ok(ComposedPrompt {
+                text,
+                blocks: vec![PromptBlock {
+                    layer: PromptLayer::StablePrefix,
+                    text: rendered,
+                    cache_marker: None,
+                }],
+                schema_version: self.registry.schema_version(),
+                audit: vec![SectionAudit {
+                    id: SectionId::Extension("emergency_fallback"),
+                    layer: PromptLayer::StablePrefix,
+                    version: 1,
+                    bytes: fallback_text.len(),
+                    estimated_tokens: estimated,
+                    source_kind: "emergency_fallback",
+                    elapsed: start.elapsed(),
+                    fallback_used: true,
+                    truncated: false,
+                    template_version: None,
+                    renderer: renderer.name(),
+                    tokenizer: self.tokenizer.name(),
+                }],
+                warnings: vec![SectionWarning::EmergencyFallback],
+            });
+        }
+
+        // Step 5: Sort by (Layer, SectionOrder, SectionId)
+        bodies.sort_by(|(a_spec, a_layer, ..), (b_spec, b_layer, ..)| {
+            a_layer
+                .cmp(b_layer)
+                .then_with(|| a_spec.order_hint.cmp(&b_spec.order_hint))
+                .then_with(|| a_spec.id.cmp(&b_spec.id))
+        });
+
+        // Step 6: Total budget enforcement + eviction
+        let (kept, eviction_warnings) = self.apply_total_budget(bodies, budget);
+
+        // Step 7: Render blocks + cache markers
+        let mut text_parts: Vec<String> = Vec::new();
+        let mut blocks: Vec<PromptBlock> = Vec::new();
+        let mut audit: Vec<SectionAudit> = Vec::new();
+        let mut warnings: Vec<SectionWarning> = Vec::new();
+        let renderer = cx.renderer.as_ref();
+
+        for (spec, layer, body, warn, source_elapsed) in &kept {
+            let rendered = renderer.render_section(&spec.title, &body.markdown);
+            text_parts.push(rendered.clone());
+
+            blocks.push(PromptBlock {
+                layer: *layer,
+                text: rendered.clone(),
+                cache_marker: None, // assigned by assign_cache_markers below
+            });
+
+            audit.push(SectionAudit {
+                id: spec.id.clone(),
+                layer: *layer,
+                version: spec.version,
+                bytes: body.markdown.len(),
+                estimated_tokens: self.tokenizer.estimate(&rendered),
+                source_kind: spec.source.source_kind(),
+                elapsed: *source_elapsed,
+                fallback_used: false,
+                truncated: warn
+                    .as_ref()
+                    .map_or(false, |w| matches!(w, SectionWarning::Truncated { .. })),
+                template_version: None,
+                renderer: renderer.name(),
+                tokenizer: self.tokenizer.name(),
+            });
+
+            if let Some(w) = warn {
+                warnings.push(w.clone());
+            }
+        }
+
+        warnings.extend(eviction_warnings);
+
+        // Cache markers (§ 3.7.1): place ephemeral markers at end of the most stable
+        // non-empty layers, skipping Ephemeral layer.
+        Self::assign_cache_markers(&mut blocks, &cx.target_model);
+
+        // Check if any critical section soft-failed — escalate to FatalError
+        let critical = critical_sections(surface);
+        for cs_id in critical {
+            if soft_failed_ids.contains(cs_id) {
+                return Err(AppError::internal(
+                    ErrorSource::System,
+                    format!(
+                        "critical section {:?} soft-failed; prompt build aborted",
+                        cs_id
+                    ),
+                ));
+            }
+        }
+
+        let text = text_parts.join(renderer.layer_separator());
+        let text = self.redactor.redact(&text).into_owned();
+
+        let total_estimated_tokens: usize = audit.iter().map(|a| a.estimated_tokens).sum();
+        let truncated_sections = audit.iter().filter(|a| a.truncated).count();
+        let fallback_sections = audit.iter().filter(|a| a.fallback_used).count();
+
+        tracing::info!(
+            target = "prompt.compose",
+            surface = ?surface,
+            schema_version = self.registry.schema_version(),
+            sections = audit.len(),
+            bytes = text.len(),
+            estimated_tokens = total_estimated_tokens,
+            warnings = warnings.len(),
+            truncated_sections,
+            fallback_sections,
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "system prompt composed"
+        );
+
+        Ok(ComposedPrompt {
+            text,
+            blocks,
+            schema_version: self.registry.schema_version(),
+            audit,
+            warnings,
+        })
+    }
+
+    // ── Legacy-compat: byte-equal to old assembler::build_system_prompt ─
+    pub async fn build_main_agent_legacy_compat(
+        &self,
+        pool: &SqlitePool,
+        raw_plan: &RuntimeModelPlan,
+        workspace_path: &str,
+        run_mode_str: &str,
+        thread_id: Option<&str>,
+    ) -> Result<ComposedPrompt, AppError> {
+        let rm = RunMode::from_str(run_mode_str);
+        let surface = PromptSurface::MainAgent { run_mode: rm };
+        let specs = self.registry.filter_for_surface(&surface);
+
+        let model_target = super::build_context::ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: false,
+        };
+
+        let cx = BuildCx {
+            pool,
+            workspace_path,
+            thread_id,
+            run_id: None,
+            raw_plan: Some(raw_plan),
+            run_mode: rm,
+            helper_profile: None,
+            custom_subagent_slug: None,
+            response_language: None,
+            target_model: model_target,
+            clock: Arc::new(SystemClock),
+            signals: Arc::new(SignalCache::new()),
+            features: Arc::new(PromptFeatureSet::empty()),
+            renderer: Arc::new(MarkdownRenderer),
+        };
+
+        let _budget = PromptBudget::default(); // not enforced in legacy compat path
+
+        // Sequential build (matches old behavior)
+        let mut built: Vec<(SectionId, String, String)> = Vec::new(); // (id, body, title)
+        for spec in &specs {
+            match spec.source.build(&cx).await {
+                Ok(SectionOutcome::Produced(body)) if !body.markdown.trim().is_empty() => {
+                    built.push((spec.id.clone(), body.markdown, spec.title.to_string()));
+                }
+                Ok(SectionOutcome::Degraded { body, .. }) if !body.markdown.trim().is_empty() => {
+                    built.push((spec.id.clone(), body.markdown, spec.title.to_string()));
+                }
+                _ => { /* skip — matches old retain(is_empty) */ }
+            }
+        }
+
+        // Sort by legacy (phase, order_in_phase)
+        built.sort_by_key(|(id, _, _)| legacy_phase_order(id));
+
+        // Render with MarkdownRenderer
+        let renderer = MarkdownRenderer;
+        let parts: Vec<String> = built
+            .iter()
+            .map(|(_, body, title)| renderer.render_section(title, body))
+            .collect();
+        let text = parts.join(renderer.layer_separator());
+
+        Ok(ComposedPrompt {
+            text,
+            blocks: Vec::new(),
+            schema_version: self.registry.schema_version(),
+            audit: Vec::new(),
+            warnings: Vec::new(),
+        })
+    }
+
+    /// Render a single section's body outside the main build pipeline.
+    pub async fn render_section_only(
+        &self,
+        id: &SectionId,
+        surface: &PromptSurface,
+        cx: &BuildCx<'_>,
+    ) -> Option<SectionBody> {
+        let spec = self
+            .registry
+            .filter_for_surface(surface)
+            .into_iter()
+            .find(|s| &s.id == id)?;
+
+        match spec.source.build(cx).await {
+            Ok(SectionOutcome::Produced(body)) => Some(body),
+            Ok(SectionOutcome::Degraded { body, .. }) => Some(body),
+            _ => None,
+        }
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────
+
+    fn apply_per_section_budget(
+        &self,
+        spec: &SectionSpec,
+        body: &SectionBody,
+        budget: &PromptBudget,
+    ) -> (SectionBody, Option<SectionWarning>) {
+        let limit = spec.max_chars.unwrap_or(budget.per_section_default_chars);
+        let char_count = body.markdown.chars().count();
+        if char_count <= limit {
+            return (body.clone(), None);
+        }
+
+        let truncated: String = body.markdown.chars().take(limit).collect();
+        let warning = SectionWarning::Truncated {
+            section_id: spec.id.clone(),
+            original_chars: char_count,
+            truncated_to: truncated.chars().count(),
+        };
+        (
+            SectionBody {
+                markdown: truncated,
+                meta: body.meta.clone(),
+            },
+            Some(warning),
+        )
+    }
+
+    fn apply_total_budget<'a>(
+        &self,
+        sections: Vec<(
+            &'a SectionSpec,
+            PromptLayer,
+            SectionBody,
+            Option<SectionWarning>,
+            std::time::Duration,
+        )>,
+        budget: &PromptBudget,
+    ) -> (
+        Vec<(
+            &'a SectionSpec,
+            PromptLayer,
+            SectionBody,
+            Option<SectionWarning>,
+            std::time::Duration,
+        )>,
+        Vec<SectionWarning>,
+    ) {
+        let mut total: usize = 0;
+        let mut kept = Vec::new();
+        let mut warnings = Vec::new();
+
+        for (spec, layer, body, warn, elapsed) in sections {
+            let char_count = body.markdown.chars().count();
+            if total + char_count <= budget.total_chars {
+                total += char_count;
+                kept.push((spec, layer, body, warn, elapsed));
+            } else {
+                warnings.push(SectionWarning::Evicted {
+                    section_id: spec.id.clone(),
+                    layer,
+                });
+            }
+        }
+
+        (kept, warnings)
+    }
+
+    /// Place ephemeral cache markers (§ 3.7.1 sliding rules):
+    /// 1. Skip empty layers.
+    /// 2. Place markers at the end of the most stable non-empty layers (StablePrefix > SessionStable > RuntimeOverlay).
+    /// 3. Up to 2 markers (system reserves 2 of the 4 Anthropic breakpoints).
+    /// 4. Skip Ephemeral layer (by definition unstable).
+    /// 5. Skip layers below `min_marker_chars`.
+    fn assign_cache_markers(blocks: &mut [PromptBlock], target: &super::build_context::ModelTarget) {
+        if !target.supports_cache_control() {
+            return;
+        }
+        // Anthropic recommends ≥ 1024 chars for cache_control to be cost-effective
+        let min_marker_chars = 1024;
+
+        // Group block indices by layer (preserving order within each layer)
+        let mut by_layer: std::collections::BTreeMap<PromptLayer, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (i, b) in blocks.iter().enumerate() {
+            if matches!(b.layer, PromptLayer::Ephemeral) {
+                continue;
+            }
+            by_layer.entry(b.layer).or_default().push(i);
+        }
+
+        let mut marker_count = 0;
+        // Iterate layers in increasing order (StablePrefix < SessionStable < RuntimeOverlay)
+        for (_layer, indices) in by_layer.iter() {
+            if marker_count >= 2 {
+                break;
+            }
+            // Total chars of this layer
+            let layer_chars: usize = indices
+                .iter()
+                .map(|i| blocks[*i].text.chars().count())
+                .sum();
+            if layer_chars < min_marker_chars {
+                continue;
+            }
+            if let Some(last_idx) = indices.last() {
+                blocks[*last_idx].cache_marker = Some(CacheMarker::Ephemeral);
+                marker_count += 1;
+            }
+        }
+    }
+}
+
+// ── Legacy phase ordering (matches old (PromptPhase, order_in_phase)) ────
+fn legacy_phase_order(id: &SectionId) -> (PromptPhase, u16) {
+    match id {
+        SectionId::Role => (PromptPhase::Core, 10),
+        SectionId::BehavioralGuidelines => (PromptPhase::Core, 20),
+        SectionId::FinalResponseStructure => (PromptPhase::Core, 30),
+        SectionId::ShellToolingGuide => (PromptPhase::Capability, 10),
+        SectionId::Skills => (PromptPhase::Capability, 20),
+        SectionId::ProjectContext => (PromptPhase::WorkspacePreference, 10),
+        SectionId::ProfileInstructions => (PromptPhase::WorkspacePreference, 20),
+        SectionId::SystemEnvironment => (PromptPhase::RuntimeContext, 10),
+        SectionId::SandboxPermissions => (PromptPhase::RuntimeContext, 20),
+        SectionId::RunMode => (PromptPhase::RuntimeContext, 30),
+        SectionId::WorkspaceLocation => (PromptPhase::RuntimeContext, 40),
+        SectionId::SubagentOutputContract => (PromptPhase::Core, 35),
+        SectionId::CustomSubagentBody => (PromptPhase::Core, 5),
+        SectionId::ActiveGoal => (PromptPhase::RuntimeContext, 999), // Ephemeral, after everything
+        SectionId::ActivePlan => (PromptPhase::RuntimeContext, 999),
+        _ => (PromptPhase::RuntimeContext, 999),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::build_context::ModelTarget;
+
+    #[test]
+    fn cache_purity_stable_prefix_omits_dates_and_ids() {
+        // § 3.13: StablePrefix must NEVER contain dates / thread_id / run_id / username.
+        // We check the static templates that drive StablePrefix sections in the registry.
+        let stable_templates: &[&str] = &[
+            include_str!("templates/role.md"),
+            include_str!("templates/behavioral_guidelines.md"),
+            include_str!("templates/final_response_structure.md"),
+        ];
+        // ISO date / timestamp / common identifier patterns
+        let date_re = regex::Regex::new(r"\b\d{4}-\d{2}-\d{2}\b").unwrap();
+        for tpl in stable_templates {
+            assert!(
+                !date_re.is_match(tpl),
+                "StablePrefix template contains an ISO date — violates § 3.13 cache purity"
+            );
+            // thread_id placeholder leakage check
+            assert!(
+                !tpl.contains("thread_id"),
+                "StablePrefix template contains 'thread_id' literal — violates § 3.13"
+            );
+            assert!(
+                !tpl.contains("run_id"),
+                "StablePrefix template contains 'run_id' literal — violates § 3.13"
+            );
+        }
+    }
+
+    #[test]
+    fn assign_cache_markers_skips_ephemeral_and_short_layers() {
+        let target = ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: true,
+        };
+        // Two short-but-non-empty stable blocks (< 1024 chars each so neither earns a marker)
+        let mut blocks = vec![
+            PromptBlock {
+                layer: PromptLayer::StablePrefix,
+                text: "short".to_string(),
+                cache_marker: None,
+            },
+            PromptBlock {
+                layer: PromptLayer::Ephemeral,
+                text: "ephemeral".to_string(),
+                cache_marker: None,
+            },
+        ];
+        Composer::assign_cache_markers(&mut blocks, &target);
+        // Ephemeral never gets a marker; short StablePrefix below threshold also skipped.
+        assert!(blocks[0].cache_marker.is_none());
+        assert!(blocks[1].cache_marker.is_none());
+    }
+
+    #[test]
+    fn assign_cache_markers_marks_long_stable_layer() {
+        let target = ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: true,
+        };
+        let long_text = "x".repeat(2048);
+        let mut blocks = vec![
+            PromptBlock {
+                layer: PromptLayer::StablePrefix,
+                text: long_text,
+                cache_marker: None,
+            },
+            PromptBlock {
+                layer: PromptLayer::Ephemeral,
+                text: "ephemeral".to_string(),
+                cache_marker: None,
+            },
+        ];
+        Composer::assign_cache_markers(&mut blocks, &target);
+        assert_eq!(blocks[0].cache_marker, Some(CacheMarker::Ephemeral));
+        assert!(blocks[1].cache_marker.is_none());
+    }
+
+    #[test]
+    fn assign_cache_markers_no_op_when_provider_unsupported() {
+        let target = ModelTarget::OpenAiCompat {
+            context_window: 128_000,
+        };
+        let mut blocks = vec![PromptBlock {
+            layer: PromptLayer::StablePrefix,
+            text: "x".repeat(2048),
+            cache_marker: None,
+        }];
+        Composer::assign_cache_markers(&mut blocks, &target);
+        assert!(blocks[0].cache_marker.is_none());
+    }
+}

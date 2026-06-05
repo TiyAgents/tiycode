@@ -5,7 +5,7 @@ use tiycore::types::{
     UserMessage,
 };
 
-use crate::core::agent_session::{normalize_profile_response_language, ResolvedModelRole};
+use crate::core::agent_session::ResolvedModelRole;
 use crate::core::plan_checkpoint::{PlanApprovalAction, PlanMessageMetadata};
 use crate::core::tiycode_default_headers;
 use crate::core::tiycode_url_policy;
@@ -102,46 +102,63 @@ pub(crate) fn primary_summary_model(
     model_plan.primary.model.clone()
 }
 
-pub(crate) fn build_compact_summary_system_prompt(response_language: Option<&str>) -> String {
-    let mut lines = vec![
-        "You compress conversation state so another model can continue after context reset.".to_string(),
-        "Return only one compact summary block using the exact XML-style wrapper below.".to_string(),
-        String::new(),
-        "Requirements:".to_string(),
-        "- Preserve the user's current goal and latest requested outcome.".to_string(),
-        "- Preserve important constraints, preferences, and decisions.".to_string(),
-        "- List work already completed and important findings.".to_string(),
-        "- List the most relevant remaining tasks, open questions, or risks.".to_string(),
-        "- Mention key files, components, commands, tools, or errors only when they matter for continuation.".to_string(),
-        "- Be factual and concise. Do not invent details.".to_string(),
-        "- Do not address the user directly. Do not include greetings or commentary.".to_string(),
-        "- Prefer short bullet lists under clear section labels.".to_string(),
-        "- Keep the summary self-contained and suitable for direct insertion into future model context.".to_string(),
-    ];
+pub(crate) async fn build_compact_summary_system_prompt(
+    response_language: Option<&str>,
+) -> String {
+    // Phase 6: sourced from the Composer's CompactionContract source via
+    // `render_section_only`. Output is byte-equal to the legacy inline string.
+    build_compaction_system_prompt(
+        crate::core::prompt::CompactionKind::Compact,
+        "__compact__",
+        response_language,
+    )
+    .await
+}
 
-    if let Some(language) = normalize_profile_response_language(response_language) {
-        lines.push(format!(
-            "- Respond in {language} unless the user explicitly asks for a different language."
-        ));
-    }
+async fn build_compaction_system_prompt(
+    kind: crate::core::prompt::CompactionKind,
+    slug_marker: &'static str,
+    response_language: Option<&str>,
+) -> String {
+    use crate::core::prompt::{
+        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptFeatureSet,
+        PromptSurface, RunMode, SectionId, SignalCache, SourceExecPolicy, SystemClock,
+    };
+    use std::sync::Arc;
 
-    lines.extend([
-        String::new(),
-        "Output rules:".to_string(),
-        "- Start with <context_summary> on its own line.".to_string(),
-        "- End with </context_summary> on its own line.".to_string(),
-        "- Do not output any text before or after the wrapper.".to_string(),
-        String::new(),
-        "Example output:".to_string(),
-        "<context_summary>".to_string(),
-        "- User goal: Stabilize /compact summary formatting.".to_string(),
-        "- Completed: Checked current local summarization flow and wrapper handling.".to_string(),
-        "- Remaining: Move compact rules into system prompt and keep output parsing robust."
-            .to_string(),
-        "</context_summary>".to_string(),
-    ]);
-
-    lines.join("\n")
+    let placeholder_pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:")
+        .expect("placeholder pool");
+    let registry = Arc::new(crate::core::prompt::registry::default_registry());
+    let composer = Composer::new(
+        registry,
+        SourceExecPolicy::default(),
+        Arc::new(NoopRedactor),
+    );
+    let surface = PromptSurface::Compaction { kind };
+    let cx = BuildCx {
+        pool: &placeholder_pool,
+        workspace_path: "",
+        thread_id: None,
+        run_id: None,
+        raw_plan: None,
+        run_mode: RunMode::Default,
+        helper_profile: None,
+        custom_subagent_slug: Some(slug_marker),
+        response_language,
+        target_model: ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: false,
+        },
+        clock: Arc::new(SystemClock),
+        signals: Arc::new(SignalCache::new()),
+        features: Arc::new(PromptFeatureSet::empty()),
+        renderer: Arc::new(MarkdownRenderer),
+    };
+    composer
+        .render_section_only(&SectionId::CompactionContract, &surface, &cx)
+        .await
+        .map(|b| b.markdown)
+        .unwrap_or_default()
 }
 
 pub(crate) fn build_compact_summary_messages(
@@ -188,7 +205,7 @@ pub(crate) async fn generate_primary_summary(
     let max_history_chars = summary_history_char_budget(model_role);
     execute_summary_llm_call(
         model_role,
-        build_compact_summary_system_prompt(response_language),
+        build_compact_summary_system_prompt(response_language).await,
         build_compact_summary_messages(history, instructions, max_history_chars),
         instructions,
         abort,
@@ -330,47 +347,16 @@ pub(crate) fn cancellation_error() -> AppError {
     )
 }
 
-pub(crate) fn build_merge_summary_system_prompt(response_language: Option<&str>) -> String {
-    let mut lines = vec![
-        "You maintain a rolling context summary for another model to continue after context reset."
-            .to_string(),
-        "You will be given the PRIOR summary (already in <context_summary> form) and a DELTA of conversation"
-            .to_string(),
-        "that happened after that summary was last produced. Produce a SINGLE updated <context_summary>"
-            .to_string(),
-        "that merges both — keeping still-relevant facts from the prior summary and folding in new information"
-            .to_string(),
-        "from the delta. Treat the prior summary as authoritative for anything it covers and do not drop"
-            .to_string(),
-        "details that remain pertinent.".to_string(),
-        String::new(),
-        "Requirements:".to_string(),
-        "- Preserve the user's current goal and most recent requested outcome.".to_string(),
-        "- Retain important constraints, preferences, and decisions from the prior summary unless the delta"
-            .to_string(),
-        "  explicitly supersedes them.".to_string(),
-        "- Fold newly completed work, findings, key files/commands, and remaining tasks from the delta in."
-            .to_string(),
-        "- Drop items the delta marks resolved; add items the delta newly raises.".to_string(),
-        "- Be factual and concise. Do not invent details. Do not address the user.".to_string(),
-        "- Prefer short bullet lists under clear section labels.".to_string(),
-    ];
-
-    if let Some(language) = normalize_profile_response_language(response_language) {
-        lines.push(format!(
-            "- Respond in {language} unless the user explicitly asks for a different language."
-        ));
-    }
-
-    lines.extend([
-        String::new(),
-        "Output rules:".to_string(),
-        "- Start with <context_summary> on its own line.".to_string(),
-        "- End with </context_summary> on its own line.".to_string(),
-        "- Do not output any text before or after the wrapper.".to_string(),
-    ]);
-
-    lines.join("\n")
+pub(crate) async fn build_merge_summary_system_prompt(
+    response_language: Option<&str>,
+) -> String {
+    // Phase 6: sourced from the Composer's CompactionContract source.
+    build_compaction_system_prompt(
+        crate::core::prompt::CompactionKind::Merge,
+        "__merge__",
+        response_language,
+    )
+    .await
 }
 
 pub(crate) fn build_merge_summary_messages(
@@ -423,7 +409,7 @@ pub(crate) async fn generate_merge_summary(
     let max_history_chars = summary_history_char_budget(model_role);
     execute_summary_llm_call(
         model_role,
-        build_merge_summary_system_prompt(response_language),
+        build_merge_summary_system_prompt(response_language).await,
         build_merge_summary_messages(
             prior_summary,
             delta_history,

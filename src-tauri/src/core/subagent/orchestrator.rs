@@ -155,10 +155,16 @@ impl HelperAgentOrchestrator {
             crate::core::agent_runtime_limits::desktop_agent_max_turns(&self.pool).await;
         agent.set_max_turns(max_turns);
         agent.set_max_retries(Some(TIYCORE_REQUEST_MAX_RETRIES));
-        agent.set_system_prompt(build_helper_system_prompt(
-            &request.system_prompt,
-            &helper_profile,
-        ));
+        agent.set_system_prompt(
+            build_helper_system_prompt(
+                &self.pool,
+                &request.workspace_path,
+                &request.run_mode,
+                &request.thread_id,
+                &helper_profile,
+            )
+            .await?,
+        );
         let web_search_enabled =
             crate::core::web_search_settings::load_web_search_settings(&self.pool)
                 .await
@@ -832,64 +838,85 @@ fn has_usage(usage: &Usage) -> bool {
         || usage.total_tokens > 0
 }
 
-const HELPER_INHERITED_SECTION_TITLES: &[&str] = &[
-    "Project Context (workspace instructions)",
-    "Profile Instructions",
-    "System Environment",
-    "Sandbox & Permissions",
-    "Runtime Context",
-];
-
-fn is_helper_inherited_section(title: &str) -> bool {
-    let normalized = title.trim();
-    HELPER_INHERITED_SECTION_TITLES
-        .iter()
-        .any(|allowed| normalized == *allowed || normalized.starts_with(&format!("{allowed} ")))
-}
-
-fn build_helper_system_prompt(
-    parent_system_prompt: &str,
+/// Build the helper subagent's system prompt via the Composer (§ 4 阶段 2b).
+///
+/// Replaces the legacy string-parsing reverse-engineering of the parent
+/// system prompt. The Composer renders the appropriate subagent surface
+/// (SubagentExplore / SubagentReview / SubagentCustom) — sections inherited
+/// by the subagent are declared via `SurfaceMatcher::Any(AnySubagent)` on
+/// each Section's spec; see prompt::registry.
+///
+/// The helper-specific tail (shell-tooling guide + helper-profile body)
+/// is appended after the composed prompt; full migration to template-backed
+/// sources is future work.
+async fn build_helper_system_prompt(
+    pool: &SqlitePool,
+    workspace_path: &str,
+    run_mode: &str,
+    thread_id: &str,
     helper_profile: &SubagentProfile,
-) -> String {
-    let inherited_prompt = inherited_helper_prompt_sections(parent_system_prompt);
-    let helper_shell_tooling_guide = helper_shell_tooling_guide(helper_profile);
-    let output_tail = match helper_profile {
-        SubagentProfile::Explore => {
-            "Your output will be consumed by the parent agent, not the user. \
-Follow any response language and response style instructions inherited above unless the parent explicitly overrides them. \
-If the inherited prompt specifies a response language, write your entire output in that language. \
-Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
-Reference specific file paths and code locations where relevant. Skip preamble."
-        }
-        SubagentProfile::Review => {
-            "Your output will be consumed by the parent agent, not the user. \
-Follow any response language instructions inherited above unless the parent explicitly overrides them. \
-If the inherited prompt specifies a response language, use that language in all natural-language JSON fields. \
-Follow the review helper's JSON contract exactly. Do not add markdown fences, headings, or prose outside the JSON object."
-        }
-        SubagentProfile::Custom { .. } => {
-            "Your output will be consumed by the parent agent, not the user. \
-Produce a concise, structured summary. Lead with the key conclusion, then supporting details. \
-Reference specific file paths and code locations where relevant. Skip preamble."
-        }
+) -> Result<String, AppError> {
+    use crate::core::prompt::{
+        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptBudget,
+        PromptFeatureSet, PromptSurface, RunMode, SourceExecPolicy, SystemClock,
+    };
+    use std::sync::Arc;
+
+    let rm = RunMode::from_str(run_mode);
+    let surface = match helper_profile {
+        SubagentProfile::Explore => PromptSurface::SubagentExplore {
+            inherited_run_mode: rm,
+        },
+        SubagentProfile::Review => PromptSurface::SubagentReview {
+            inherited_run_mode: rm,
+        },
+        SubagentProfile::Custom { slug, .. } => PromptSurface::SubagentCustom {
+            slug: slug.clone(),
+            inherited_run_mode: rm,
+            cache_stability: crate::core::prompt::SubagentCacheStability::Volatile,
+        },
     };
 
-    if inherited_prompt.trim().is_empty() {
-        format!(
-            "{}\n\n{}\n\n{}",
-            helper_shell_tooling_guide,
-            helper_profile.system_prompt(),
-            output_tail
-        )
-    } else {
-        format!(
-            "{}\n\n{}\n\n{}\n\n{}",
-            inherited_prompt,
-            helper_shell_tooling_guide,
-            helper_profile.system_prompt(),
-            output_tail
-        )
-    }
+    let registry = Arc::new(crate::core::prompt::registry::default_registry());
+    let composer = Composer::new(
+        registry,
+        SourceExecPolicy::default(),
+        Arc::new(NoopRedactor),
+    );
+
+    let cx = BuildCx {
+        pool,
+        workspace_path,
+        thread_id: Some(thread_id),
+        run_id: None,
+        raw_plan: None,
+        run_mode: rm,
+        helper_profile: Some(helper_profile),
+        custom_subagent_slug: match helper_profile {
+            SubagentProfile::Custom { slug, .. } => Some(slug.as_str()),
+            _ => None,
+        },
+        response_language: None,
+        target_model: ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: false,
+        },
+        clock: Arc::new(SystemClock),
+        signals: Arc::new(crate::core::prompt::SignalCache::new()),
+        features: Arc::new(PromptFeatureSet::empty()),
+        renderer: Arc::new(MarkdownRenderer),
+    };
+
+    let budget = PromptBudget::default();
+    let composed = composer.build(&surface, &cx, &budget).await?;
+
+    let helper_shell_tooling_guide = helper_shell_tooling_guide(helper_profile);
+    let helper_body = helper_profile.system_prompt();
+
+    Ok(format!(
+        "{}\n\n{}\n\n{}",
+        composed.text, helper_shell_tooling_guide, helper_body
+    ))
 }
 
 fn helper_shell_tooling_guide(helper_profile: &SubagentProfile) -> &'static str {
@@ -906,41 +933,11 @@ fn helper_shell_tooling_guide(helper_profile: &SubagentProfile) -> &'static str 
     }
 }
 
-fn inherited_helper_prompt_sections(parent_system_prompt: &str) -> String {
-    collect_prompt_sections(parent_system_prompt)
-        .into_iter()
-        .filter(|(title, _)| is_helper_inherited_section(title))
-        .map(|(_, body)| body)
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-fn collect_prompt_sections(prompt: &str) -> Vec<(&str, String)> {
-    let mut sections = Vec::new();
-    let mut current_title: Option<&str> = None;
-    let mut current_lines: Vec<&str> = Vec::new();
-
-    for line in prompt.lines() {
-        if let Some(title) = line.strip_prefix("## ") {
-            if let Some(previous_title) = current_title.take() {
-                sections.push((previous_title, current_lines.join("\n").trim().to_string()));
-            }
-            current_title = Some(title.trim());
-            current_lines = vec![line];
-        } else if current_title.is_some() {
-            current_lines.push(line);
-        }
-    }
-
-    if let Some(previous_title) = current_title {
-        sections.push((previous_title, current_lines.join("\n").trim().to_string()));
-    }
-
-    sections
-        .into_iter()
-        .filter(|(_, body)| !body.trim().is_empty())
-        .collect()
-}
+// Phase 2b: legacy string-parsing functions removed.
+// `collect_prompt_sections` / `inherited_helper_prompt_sections` /
+// `is_helper_inherited_section` / HELPER_INHERITED_SECTION_TITLES were replaced
+// by the Composer-based subagent surface rendering above. See
+// docs/prompt-injection-refactor.md § 1.4 / § 4 阶段 2.
 
 fn take_escalation_summary(summary: &Arc<StdMutex<Option<String>>>) -> Option<String> {
     summary.lock().ok().and_then(|mut slot| slot.take())
@@ -993,53 +990,10 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn helper_system_prompt_preserves_parent_language_instruction() {
-        let prompt = build_helper_system_prompt(
-            "## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.",
-            &SubagentProfile::Explore,
-        );
-
-        assert!(prompt.contains("Respond in 简体中文"));
-        assert!(prompt.contains(
-            "Follow any response language and response style instructions inherited above"
-        ));
-        assert!(prompt.contains("write your entire output in that language"));
-    }
-
-    #[test]
-    fn helper_system_prompt_inherits_only_allowed_sections() {
-        let parent_prompt = "## Role\nYou are TiyCode.\n\n## Project Context (workspace instructions)\nFollow AGENTS.md.\n\n## Behavioral Guidelines\nUse clarify when needed.\n\n## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.\n\n## Sandbox & Permissions\n- Approval policy: auto.\n\n## Shell Tooling Guide\n- Generic shell guidance.\n\n## Final Response Structure\nUse structured markdown.";
-
-        let prompt = build_helper_system_prompt(parent_prompt, &SubagentProfile::Explore);
-
-        assert!(prompt.contains("## Project Context (workspace instructions)"));
-        assert!(prompt.contains("## Profile Instructions"));
-        assert!(prompt.contains("## Sandbox & Permissions"));
-        assert!(prompt.contains("## Shell Tooling Guide"));
-        assert!(!prompt.contains("## Role\nYou are TiyCode."));
-        assert!(!prompt.contains("## Behavioral Guidelines"));
-        assert!(!prompt.contains("## Final Response Structure"));
-        assert!(!prompt.contains("Generic shell guidance."));
-    }
-
-    #[test]
-    fn helper_system_prompt_preserves_environment_and_runtime_context_sections() {
-        let parent_prompt = "## System Environment\n- Operating system: macos\n\n## Runtime Context\nCurrent date: 2026-04-04\nWorkspace path: /tmp/project\n\n## Run Mode\nDefault execution mode is active.";
-
-        let inherited = inherited_helper_prompt_sections(parent_prompt);
-
-        assert!(inherited.contains("## System Environment"));
-        assert!(inherited.contains("## Runtime Context"));
-        assert!(!inherited.contains("## Run Mode"));
-    }
-
-    #[test]
     fn explore_helper_shell_guide_only_mentions_read_only_tools() {
-        let prompt = build_helper_system_prompt("", &SubagentProfile::Explore);
-
-        assert!(prompt.contains(
-            "This helper does not have `shell`, `edit`, or Terminal panel control tools."
-        ));
+        let prompt = helper_shell_tooling_guide(&SubagentProfile::Explore);
+        assert!(prompt
+            .contains("This helper does not have `shell`, `edit`, or Terminal panel control tools."));
         assert!(prompt.contains("`read`, `list`, `find`, and `search`"));
         assert!(prompt.contains("`search` defaults to literal matching."));
         assert!(!prompt.contains("`term_write`"));
@@ -1049,41 +1003,12 @@ mod tests {
 
     #[test]
     fn review_helper_shell_guide_matches_review_tool_whitelist() {
-        let prompt = build_helper_system_prompt("", &SubagentProfile::Review);
-
+        let prompt = helper_shell_tooling_guide(&SubagentProfile::Review);
         assert!(prompt.contains("`term_status`, `term_output`, and `shell`"));
         assert!(
             prompt.contains("does not have `edit`, `term_write`, `term_restart`, or `term_close`")
         );
         assert!(!prompt.contains("This helper may use `term_write`"));
-    }
-
-    #[test]
-    fn helper_inherited_sections_preserve_parent_order() {
-        let parent_prompt = "## Runtime Context\nCurrent date: 2026-04-04\n\n## Project Context (workspace instructions)\nFollow AGENTS.md.\n\n## Profile Instructions\nRespond in 简体中文 unless the user explicitly asks for a different language.\n\n## Final Response Structure\nUse structured markdown.";
-
-        let inherited = inherited_helper_prompt_sections(parent_prompt);
-        let runtime_index = inherited.find("## Runtime Context").unwrap();
-        let project_index = inherited
-            .find("## Project Context (workspace instructions)")
-            .unwrap();
-        let profile_index = inherited.find("## Profile Instructions").unwrap();
-
-        assert!(runtime_index < project_index);
-        assert!(project_index < profile_index);
-        assert!(!inherited.contains("## Final Response Structure"));
-    }
-
-    #[test]
-    fn collect_prompt_sections_keeps_section_boundaries() {
-        let sections =
-            collect_prompt_sections("## One\nalpha\n\n## Two\nbeta\nline two\n\n## Three\ngamma");
-
-        assert_eq!(sections.len(), 3);
-        assert_eq!(sections[0].0, "One");
-        assert_eq!(sections[1].0, "Two");
-        assert!(sections[1].1.contains("beta\nline two"));
-        assert_eq!(sections[2].0, "Three");
     }
 
     #[test]
@@ -1161,16 +1086,6 @@ mod tests {
             snapshot.current_action.as_deref(),
             Some("listing workspace")
         );
-    }
-
-    #[test]
-    fn helper_inherited_section_accepts_exact_and_suffixed_titles() {
-        assert!(is_helper_inherited_section(
-            "Project Context (workspace instructions)"
-        ));
-        assert!(is_helper_inherited_section("Runtime Context (workspace)"));
-        assert!(is_helper_inherited_section("  Profile Instructions  "));
-        assert!(!is_helper_inherited_section("Behavioral Guidelines"));
     }
 
     #[test]

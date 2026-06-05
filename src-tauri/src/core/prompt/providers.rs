@@ -399,14 +399,12 @@ fn truncate_chars(value: &str, max_chars: usize) -> (String, bool) {
 
 fn build_system_environment_body() -> String {
     let shell = current_shell();
-    let current_date = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     format!(
-        "- Operating system: {}\n- Architecture: {}\n- Default shell: {}\n- Current date: {}",
+        "- Operating system: {}\n- Architecture: {}\n- Default shell: {}",
         std::env::consts::OS,
         std::env::consts::ARCH,
         shell,
-        current_date,
     )
 }
 
@@ -456,7 +454,7 @@ mod tests {
         assert!(body.contains("- Operating system:"));
         assert!(body.contains("- Architecture:"));
         assert!(body.contains("- Default shell:"));
-        assert!(body.contains("- Current date:"));
+        assert!(!body.contains("Current date:"), "current_date must not appear in system prompt; it is injected via CurrentDateInjector");
         assert!(!body.contains("Common CLI tools"));
     }
 

@@ -967,6 +967,7 @@ pub(super) mod tests {
             &RuntimeModelPlan::default(),
             workspace_root.to_string_lossy().as_ref(),
             "default",
+            "test_thread",
         )
         .await
         .expect("system prompt");
@@ -1007,6 +1008,7 @@ Used for prompt assembly coverage.
             &RuntimeModelPlan::default(),
             workspace_root.to_string_lossy().as_ref(),
             "default",
+            "test_thread",
         )
         .await
         .expect("system prompt");
@@ -1048,6 +1050,7 @@ Used for prompt assembly coverage.
             &RuntimeModelPlan::default(),
             workspace_root.to_string_lossy().as_ref(),
             "default",
+            "test_thread",
         )
         .await
         .expect("system prompt");
@@ -5000,5 +5003,181 @@ Used for prompt assembly coverage.
             !first_still_pending,
             "first message must not remain Pending after cancel attempt"
         );
+    }
+
+    #[tokio::test]
+    async fn composer_legacy_compat_produces_same_sections_as_assembler() {
+        use crate::core::agent_session::RuntimeModelPlan;
+        use crate::core::prompt::assembler;
+        use crate::core::prompt::{Composer, NoopRedactor, SourceExecPolicy};
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let temp_dir = tempdir().expect("temp dir");
+        let workspace_root = temp_dir.path().join("workspace");
+        fs::create_dir(&workspace_root).expect("workspace dir");
+
+        let db_path = temp_dir.path().join("test.db");
+        let pool = init_database(&db_path).await.expect("database");
+
+        let raw_plan = RuntimeModelPlan::default();
+        let workspace_path = workspace_root.to_string_lossy();
+
+        // Legacy assembler output
+        let legacy_prompt = assembler::build_system_prompt(
+            &pool,
+            &raw_plan,
+            &workspace_path,
+            "default",
+        )
+        .await
+        .expect("legacy prompt");
+
+        // Composer legacy compat output
+        let registry = Arc::new(
+            crate::core::prompt::registry::default_registry(),
+        );
+        let composer = Composer::new(
+            registry,
+            SourceExecPolicy::default(),
+            Arc::new(NoopRedactor),
+        );
+        let composed = composer
+            .build_main_agent_legacy_compat(
+                &pool,
+                &raw_plan,
+                &workspace_path,
+                "default",
+                Some("test_thread"),
+            )
+            .await
+            .expect("composer prompt");
+
+        // Parse both into section maps: split on "\n## " to extract (title, body) pairs.
+        // Normalize internal blank-line count (collapse 2+ consecutive newlines → 1 blank line)
+        // to handle benign formatting differences between legacy Rust strings and template files.
+        fn parse_sections(text: &str) -> BTreeMap<String, String> {
+            let mut map = BTreeMap::new();
+            let parts: Vec<&str> = text.split("\n## ").collect();
+            for part in parts {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                // Re-add "## " if this was the first section (which wasn't split)
+                let section_text = if part.starts_with("## ") {
+                    part.to_string()
+                } else {
+                    format!("## {}", part)
+                };
+                if let Some(newline_pos) = section_text.find('\n') {
+                    let title = section_text[3..newline_pos].trim().to_string();
+                    let body = section_text[newline_pos + 1..].trim().to_string();
+                    // Collapse 2+ consecutive newlines to a single blank line for comparison
+                    let normalized = collapse_blank_lines(&body);
+                    map.insert(title, normalized);
+                }
+            }
+            map
+        }
+
+        fn collapse_blank_lines(s: &str) -> String {
+            let mut result = String::with_capacity(s.len());
+            let mut blank_count = 0u8;
+            for ch in s.chars() {
+                if ch == '\n' {
+                    if blank_count < 2 {
+                        result.push(ch);
+                    }
+                    blank_count += 1;
+                } else {
+                    blank_count = 0;
+                    result.push(ch);
+                }
+            }
+            result
+        }
+
+        let legacy_sections = parse_sections(&legacy_prompt);
+        let composer_sections = parse_sections(&composed.text);
+
+        // Verify all legacy sections exist in composer output with identical content
+        for (title, legacy_body) in &legacy_sections {
+            assert!(
+                composer_sections.contains_key(title),
+                "composer output missing section '{}' that exists in legacy output",
+                title
+            );
+            let composer_body = composer_sections.get(title).unwrap();
+            assert_eq!(
+                composer_body, legacy_body,
+                "section '{}' body differs between legacy and composer",
+                title
+            );
+        }
+
+        // Composer may have additional sections (ActiveGoal) — that's expected
+        let extra: Vec<&String> = composer_sections
+            .keys()
+            .filter(|k| !legacy_sections.contains_key(*k))
+            .collect();
+        if !extra.is_empty() {
+            println!(
+                "composer output has {} extra section(s): {:?} (expected, e.g. ActiveGoal)",
+                extra.len(),
+                extra
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn inject_runtime_context_prepends_current_date_block() {
+        use crate::core::agent_session::inject_runtime_context;
+
+        let original = "Help me refactor this function.";
+        let wrapped = inject_runtime_context(original).await;
+
+        assert!(
+            wrapped.contains("<runtime_context"),
+            "wrapped prompt must contain runtime_context tag: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("Current date:"),
+            "wrapped prompt must contain Current date: {wrapped}"
+        );
+        assert!(
+            wrapped.contains(original),
+            "wrapped prompt must preserve the original user prompt: {wrapped}"
+        );
+        // Section 3.7 BeforeLatestUser: the runtime block must precede the user prompt.
+        let runtime_idx = wrapped.find("<runtime_context").unwrap();
+        let prompt_idx = wrapped.find(original).unwrap();
+        assert!(
+            runtime_idx < prompt_idx,
+            "runtime context must come before the user prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn inject_runtime_context_dedups_implicitly_per_turn() {
+        // Two consecutive prompt-builds yield independent wrappers; the first
+        // wrapped output is NOT seen by the second, simulating per-turn dedup
+        // (§ 3.7 dedup_id semantics enforced by non-persistence).
+        use crate::core::agent_session::inject_runtime_context;
+
+        let raw = "Show me the test plan.";
+        let wrapped1 = inject_runtime_context(raw).await;
+        let wrapped2 = inject_runtime_context(raw).await;
+
+        // Each turn re-wraps from the raw prompt — it does NOT pick up the
+        // previous turn's wrapper (which is what an explicit dedup_id would prevent).
+        let runtime_count_in_wrapped2 = wrapped2.matches("<runtime_context").count();
+        assert_eq!(
+            runtime_count_in_wrapped2, 1,
+            "wrapped2 must contain exactly one runtime_context block: {wrapped2}"
+        );
+        // Both wrappers contain the same raw prompt body
+        assert!(wrapped1.contains(raw));
+        assert!(wrapped2.contains(raw));
     }
 }
