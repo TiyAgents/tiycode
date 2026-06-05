@@ -58,7 +58,7 @@ export function WorkbenchPreviewOverlay({
         </div>
 
         {/* Content */}
-        <div className="min-h-0 flex-1 overflow-auto bg-app-canvas/70">
+        <div className="min-h-0 flex-1 overflow-auto bg-app-canvas/70 select-text">
           {children}
         </div>
       </div>
