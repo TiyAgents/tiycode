@@ -1,11 +1,15 @@
 use async_trait::async_trait;
 
-use super::build_context::BuildCx;
-use super::section_source::{FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource};
-use super::templates::{load_template, parse_front_matter, render_template_strict, TemplateVars};
+use super::super::build_context::BuildCx;
+use super::super::section_source::{
+    FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource,
+};
+use super::super::templates::{
+    load_template, parse_front_matter, render_template_strict, TemplateVars,
+};
 
 const TEMPLATE_REL_PATH: &str = "title/contract.md";
-const TEMPLATE_EMBEDDED: &str = include_str!("templates/title/contract.md");
+const TEMPLATE_EMBEDDED: &str = include_str!("../templates/title/contract.md");
 const DECLARED_KEYS: &[&'static str] = &[];
 
 /// Template-backed SectionSource for the TitleContract section.
@@ -30,7 +34,7 @@ impl SectionSource for TitleContractSource {
         let raw = load_template(TEMPLATE_REL_PATH, TEMPLATE_EMBEDDED);
         let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
-                super::error_codes::codes::TEMPLATE_NOT_FOUND,
+                super::super::error_codes::codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", TEMPLATE_REL_PATH, e),
             )
         })?;
@@ -48,7 +52,7 @@ impl SectionSource for TitleContractSource {
         let vars = TemplateVars::new();
         let rendered = render_template_strict(&body, DECLARED_KEYS, &vars).map_err(|e| {
             FatalError::new(
-                super::error_codes::codes::TEMPLATE_MISSING_KEY,
+                super::super::error_codes::codes::TEMPLATE_MISSING_KEY,
                 format!("{}: {}", TEMPLATE_REL_PATH, e),
             )
         })?;

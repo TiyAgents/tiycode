@@ -3,12 +3,16 @@ use async_trait::async_trait;
 use crate::model::goal::GoalStatus;
 use crate::persistence::repo::goal_repo;
 
-use super::build_context::BuildCx;
-use super::section_source::{FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource};
-use super::templates::{load_template, parse_front_matter, render_template_strict, TemplateVars};
+use super::super::build_context::BuildCx;
+use super::super::section_source::{
+    FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource,
+};
+use super::super::templates::{
+    load_template, parse_front_matter, render_template_strict, TemplateVars,
+};
 
 const TEMPLATE_REL_PATH: &str = "active_goal.tpl.md";
-const TEMPLATE_EMBEDDED: &str = include_str!("templates/active_goal.tpl.md");
+const TEMPLATE_EMBEDDED: &str = include_str!("../templates/active_goal.tpl.md");
 const DECLARED_KEYS: &[&'static str] = &["objective", "turns_used", "max_turns"];
 
 /// Produces the "Active Goal" section when an active goal exists for the current thread.
@@ -30,7 +34,10 @@ impl SectionSource for ActiveGoalSource {
         let goal = goal_repo::find_by_thread_id(cx.pool, thread_id)
             .await
             .map_err(|e| {
-                FatalError::new(super::error_codes::codes::GOAL_LOAD_FAILED, e.to_string())
+                FatalError::new(
+                    super::super::error_codes::codes::GOAL_LOAD_FAILED,
+                    e.to_string(),
+                )
             })?;
 
         let goal = match goal {
@@ -41,7 +48,7 @@ impl SectionSource for ActiveGoalSource {
         let raw = load_template(TEMPLATE_REL_PATH, TEMPLATE_EMBEDDED);
         let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
-                super::error_codes::codes::TEMPLATE_NOT_FOUND,
+                super::super::error_codes::codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", TEMPLATE_REL_PATH, e),
             )
         })?;
@@ -53,7 +60,7 @@ impl SectionSource for ActiveGoalSource {
 
         let rendered = render_template_strict(&body, DECLARED_KEYS, &vars).map_err(|e| {
             FatalError::new(
-                super::error_codes::codes::TEMPLATE_MISSING_KEY,
+                super::super::error_codes::codes::TEMPLATE_MISSING_KEY,
                 format!("{}: {}", TEMPLATE_REL_PATH, e),
             )
         })?;

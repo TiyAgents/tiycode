@@ -2,15 +2,20 @@ use async_trait::async_trait;
 
 use crate::core::subagent::SubagentProfile;
 
-use super::build_context::BuildCx;
-use super::section_source::{FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource};
-use super::templates::{load_template, parse_front_matter, render_template_strict, TemplateVars};
+use super::super::build_context::BuildCx;
+use super::super::section_source::{
+    FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource,
+};
+use super::super::templates::{
+    load_template, parse_front_matter, render_template_strict, TemplateVars,
+};
 
 const EXPLORE_TEMPLATE_REL_PATH: &str = "subagent/output_contract.explore.md";
 const EXPLORE_TEMPLATE_EMBEDDED: &str =
-    include_str!("templates/subagent/output_contract.explore.md");
+    include_str!("../templates/subagent/output_contract.explore.md");
 const REVIEW_TEMPLATE_REL_PATH: &str = "subagent/output_contract.review.md";
-const REVIEW_TEMPLATE_EMBEDDED: &str = include_str!("templates/subagent/output_contract.review.md");
+const REVIEW_TEMPLATE_EMBEDDED: &str =
+    include_str!("../templates/subagent/output_contract.review.md");
 const DECLARED_KEYS: &[&'static str] = &[];
 
 /// Template-backed SectionSource for the SubagentOutputContract section.
@@ -49,7 +54,7 @@ impl SectionSource for SubagentOutputContractSource {
         let raw = load_template(rel_path, embedded);
         let (tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
-                super::error_codes::codes::TEMPLATE_NOT_FOUND,
+                super::super::error_codes::codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", rel_path, e),
             )
         })?;
@@ -67,7 +72,7 @@ impl SectionSource for SubagentOutputContractSource {
         let vars = TemplateVars::new();
         let rendered = render_template_strict(&body, DECLARED_KEYS, &vars).map_err(|e| {
             FatalError::new(
-                super::error_codes::codes::TEMPLATE_MISSING_KEY,
+                super::super::error_codes::codes::TEMPLATE_MISSING_KEY,
                 format!("{}: {}", rel_path, e),
             )
         })?;

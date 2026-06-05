@@ -2,8 +2,8 @@ use async_trait::async_trait;
 
 use crate::persistence::repo::profile_repo;
 
-use super::build_context::BuildCx;
-use super::section_source::{FatalError, SectionBody, SectionOutcome, SectionSource};
+use super::super::build_context::BuildCx;
+use super::super::section_source::{FatalError, SectionBody, SectionOutcome, SectionSource};
 
 /// Template-backed SectionSource for Profile Instructions.
 /// Replaces LegacyProfileInstructionsSource (which delegated to the old ProfileProvider).

@@ -1,12 +1,5 @@
-// ── Section sources (one per SectionId) ──────────────────────────
-pub mod active_goal_source;
-pub mod active_plan_source;
-pub mod compaction_contract_source;
-pub mod profile_instructions_source;
-pub mod skills_source;
-pub mod subagent_output_contract_source;
-pub mod template_sources;
-pub mod title_contract_source;
+// ── Section sources (one per SectionId, each in sources/) ────────
+pub mod sources;
 
 // ── Backward-compat test utilities (not used in production) ─────
 pub mod providers;
@@ -21,7 +14,6 @@ pub mod error_codes;
 pub mod exec_policy;
 pub mod inheritance;
 pub mod layer;
-pub mod legacy_adapter;
 pub mod redactor;
 pub mod registry;
 pub mod renderer;

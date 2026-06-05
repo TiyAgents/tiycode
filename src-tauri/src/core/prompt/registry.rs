@@ -1,22 +1,16 @@
 use std::borrow::Cow;
 
-use super::active_goal_source::ActiveGoalSource;
-use super::active_plan_source::ActivePlanSource;
-use super::compaction_contract_source::CompactionContractSource;
 use super::layer::{LayerResolver, PromptLayer, SectionAnchor, SectionOrder};
-use super::legacy_adapter::SubagentBodySource;
-use super::profile_instructions_source::ProfileInstructionsSource;
 use super::section_id::SectionId;
 use super::section_source::{SectionCriticality, SectionSpec};
-use super::skills_source::SkillsSource;
-use super::subagent_output_contract_source::SubagentOutputContractSource;
-use super::surface::{PromptSurface, SurfaceMatcher, SurfacePattern};
-use super::template_sources::{
-    ProjectContextSource, RunModeSource, SandboxPermissionsSource, SystemEnvironmentSource,
+use super::sources::{
+    ActiveGoalSource, ActivePlanSource, CompactionContractSource, ProfileInstructionsSource,
+    ProjectContextSource, RunModeSource, SandboxPermissionsSource, SkillsSource,
+    SubagentBodySource, SubagentOutputContractSource, SystemEnvironmentSource, TitleContractSource,
     WorkspaceLocationSource,
 };
+use super::surface::{PromptSurface, SurfaceMatcher, SurfacePattern};
 use super::templates::{TemplateSource, TemplateVars};
-use super::title_contract_source::TitleContractSource;
 
 /// PerSurface layer resolver for ProfileInstructions:
 /// MainAgent / Subagent → SessionStable

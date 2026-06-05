@@ -3,12 +3,16 @@ use async_trait::async_trait;
 use crate::core::plan_checkpoint::parse_plan_message_metadata;
 use crate::persistence::repo::message_repo;
 
-use super::build_context::BuildCx;
-use super::section_source::{FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource};
-use super::templates::{load_template, parse_front_matter, render_template_strict, TemplateVars};
+use super::super::build_context::BuildCx;
+use super::super::section_source::{
+    FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource,
+};
+use super::super::templates::{
+    load_template, parse_front_matter, render_template_strict, TemplateVars,
+};
 
 const TEMPLATE_REL_PATH: &str = "active_plan.tpl.md";
-const TEMPLATE_EMBEDDED: &str = include_str!("templates/active_plan.tpl.md");
+const TEMPLATE_EMBEDDED: &str = include_str!("../templates/active_plan.tpl.md");
 const DECLARED_KEYS: &[&'static str] = &[];
 
 /// Produces the "Active Plan" section when an approved (non-superseded) plan exists
@@ -31,7 +35,10 @@ impl SectionSource for ActivePlanSource {
         let messages = message_repo::list_recent(cx.pool, thread_id, None, 256)
             .await
             .map_err(|e| {
-                FatalError::new(super::error_codes::codes::PLAN_LOAD_FAILED, e.to_string())
+                FatalError::new(
+                    super::super::error_codes::codes::PLAN_LOAD_FAILED,
+                    e.to_string(),
+                )
             })?;
 
         // Find the latest non-superseded plan message
@@ -55,7 +62,7 @@ impl SectionSource for ActivePlanSource {
         let raw = load_template(TEMPLATE_REL_PATH, TEMPLATE_EMBEDDED);
         let (_tmpl, body) = parse_front_matter(&raw).map_err(|e| {
             FatalError::new(
-                super::error_codes::codes::TEMPLATE_NOT_FOUND,
+                super::super::error_codes::codes::TEMPLATE_NOT_FOUND,
                 format!("{}: {}", TEMPLATE_REL_PATH, e),
             )
         })?;
@@ -64,7 +71,7 @@ impl SectionSource for ActivePlanSource {
 
         let rendered = render_template_strict(&body, DECLARED_KEYS, &vars).map_err(|e| {
             FatalError::new(
-                super::error_codes::codes::TEMPLATE_MISSING_KEY,
+                super::super::error_codes::codes::TEMPLATE_MISSING_KEY,
                 format!("{}: {}", TEMPLATE_REL_PATH, e),
             )
         })?;
