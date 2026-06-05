@@ -7,6 +7,7 @@ import {
   buildWorkspaceItemsFromDtos,
   clearActiveThreads,
   getActiveThread,
+  findThreadById,
   activateThread,
   buildThreadTitle,
   mergeRecentProjects,
@@ -30,6 +31,8 @@ function thread(overrides: Partial<ThreadSummaryDto> = {}): ThreadSummaryDto {
     status: "idle",
     lastActiveAt: "2026-04-25T10:00:00Z",
     createdAt: "2026-04-25T10:00:00Z",
+    activeRunStartedAtMs: null,
+    activeRunElapsedSeconds: null,
     ...overrides,
   };
 }
@@ -126,6 +129,33 @@ describe("helpers: thread & workspace", () => {
 
     expect(updated[0].threads.find((t) => t.id === "t-2")?.active).toBe(true);
     expect(updated[0].threads.find((t) => t.id === "t-1")?.active).toBe(false);
+  });
+});
+
+describe("helpers: findThreadById", () => {
+  it("returns the matching thread across multiple workspaces", () => {
+    const ws1 = workspaceItem("ws-1", [threadItem("t-1", "Thread 1")]);
+    const ws2 = workspaceItem("ws-2", [
+      threadItem("t-2", "Thread 2"),
+      threadItem("t-3", "Thread 3"),
+    ]);
+    const found = findThreadById([ws1, ws2], "t-3");
+    expect(found?.id).toBe("t-3");
+    expect(found?.name).toBe("Thread 3");
+  });
+
+  it("returns null when no thread matches", () => {
+    const ws = workspaceItem("ws-1", [threadItem("t-1", "Thread 1")]);
+    expect(findThreadById([ws], "missing")).toBeNull();
+  });
+
+  it("returns null for a null or empty threadId", () => {
+    const ws = workspaceItem("ws-1", [threadItem("t-1", "Thread 1")]);
+    expect(findThreadById([ws], null)).toBeNull();
+  });
+
+  it("returns null when workspaces is empty", () => {
+    expect(findThreadById([], "t-1")).toBeNull();
   });
 });
 
@@ -321,6 +351,7 @@ describe("helpers: buildWorkspaceThreadItem", () => {
       status: "running",
       lastActiveAt: "2026-04-25T11:59:00Z",
       createdAt: "2026-04-25T10:00:00Z",
+      activeRunStartedAtMs: null, activeRunElapsedSeconds: null,
     };
     const item = buildWorkspaceThreadItem(dto, null, "en");
     expect(item.id).toBe("t1");
@@ -339,6 +370,7 @@ describe("helpers: buildWorkspaceThreadItem", () => {
       status: "idle",
       lastActiveAt: "2026-04-25T11:59:00Z",
       createdAt: "2026-04-25T10:00:00Z",
+      activeRunStartedAtMs: null, activeRunElapsedSeconds: null,
     };
     const item = buildWorkspaceThreadItem(dto, null, "en");
     expect(item.name).toBe("New thread");
@@ -353,6 +385,7 @@ describe("helpers: buildWorkspaceThreadItem", () => {
       status: "idle",
       lastActiveAt: "2026-04-25T11:59:00Z",
       createdAt: "2026-04-25T10:00:00Z",
+      activeRunStartedAtMs: null, activeRunElapsedSeconds: null,
     };
     const item = buildWorkspaceThreadItem(dto, "t1", "en");
     expect(item.active).toBe(true);
@@ -367,6 +400,7 @@ describe("helpers: buildWorkspaceThreadItem", () => {
       status: "idle",
       lastActiveAt: "",
       createdAt: "2026-04-25T10:00:00Z",
+      activeRunStartedAtMs: null, activeRunElapsedSeconds: null,
     };
     const item = buildWorkspaceThreadItem(dto, null, "en");
     // Should use createdAt (a valid date) rather than empty lastActiveAt

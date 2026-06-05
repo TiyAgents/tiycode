@@ -293,6 +293,7 @@ impl AgentRunManager {
         let _ = frontend_tx.send(ThreadStreamEvent::RunStarted {
             run_id: run_id.clone(),
             run_mode: "compact".to_string(),
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
         });
         let _ = frontend_tx.send(ThreadStreamEvent::ContextCompressing {
             run_id: run_id.clone(),

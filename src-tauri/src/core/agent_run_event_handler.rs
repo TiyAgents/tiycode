@@ -334,6 +334,16 @@ impl AgentRunManager {
             }
             ThreadStreamEvent::MessageDiscarded { message_id, .. } => {
                 message_repo::update_status(&self.pool, message_id, "discarded").await?;
+                // Clear streaming_message_id when the discarded message is the
+                // one currently being streamed (e.g. request-level retry).
+                // This ensures the next TextDelta triggers
+                // ensure_streaming_message to INSERT a fresh DB row.
+                let mut runs = self.active_runs.lock().await;
+                if let Some(run) = runs.get_mut(run_id) {
+                    if run.streaming_message_id.as_deref() == Some(message_id) {
+                        run.streaming_message_id = None;
+                    }
+                }
             }
             ThreadStreamEvent::ReasoningUpdated {
                 message_id,

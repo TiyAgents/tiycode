@@ -41,7 +41,29 @@ impl ThreadManager {
         )
         .await?;
 
-        Ok(records.into_iter().map(ThreadSummaryDto::from).collect())
+        // Backfill the active-run start timestamp and elapsed running seconds
+        // in one round-trip so the frontend workbench header can render
+        // elapsed time without a follow-up IPC per thread.
+        let thread_ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
+        let active_started =
+            run_repo::list_active_run_started_at_ms_by_threads(&self.pool, &thread_ids).await?;
+        let thread_elapsed =
+            run_repo::list_thread_elapsed_running_seconds_by_threads(&self.pool, &thread_ids)
+                .await?;
+
+        Ok(records
+            .into_iter()
+            .map(|r| {
+                let mut dto = ThreadSummaryDto::from(r);
+                if let Some(ms) = active_started.get(&dto.id).copied() {
+                    dto.active_run_started_at_ms = Some(ms);
+                }
+                if let Some(secs) = thread_elapsed.get(&dto.id).copied() {
+                    dto.active_run_elapsed_seconds = Some(secs);
+                }
+                dto
+            })
+            .collect())
     }
 
     /// Create a new thread under a workspace.

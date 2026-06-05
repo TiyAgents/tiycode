@@ -215,6 +215,7 @@ pub(super) mod tests {
             ThreadStreamEvent::RunStarted {
                 run_id: "run-1".to_string(),
                 run_mode: "default".to_string(),
+                started_at_ms: 0,
             },
             ThreadStreamEvent::RequestRetrying {
                 run_id: "run-1".to_string(),
@@ -315,6 +316,7 @@ pub(super) mod tests {
                 &ThreadStreamEvent::RunStarted {
                     run_id: "run-1".to_string(),
                     run_mode: "default".to_string(),
+                    started_at_ms: 0,
                 },
                 false,
             ),
@@ -362,6 +364,7 @@ pub(super) mod tests {
             ThreadStreamEvent::RunStarted {
                 run_id: "run-1".to_string(),
                 run_mode: "default".to_string(),
+                started_at_ms: 0,
             },
             ThreadStreamEvent::RequestRetrying {
                 run_id: "run-1".to_string(),
@@ -860,6 +863,7 @@ pub(super) mod tests {
             &ThreadStreamEvent::RunStarted {
                 run_id: "run-1".into(),
                 run_mode: "default".into(),
+                started_at_ms: 0,
             }
         ));
         assert!(!should_complete_reasoning_for_event(
@@ -1636,6 +1640,7 @@ pub(super) mod tests {
         let event = ThreadStreamEvent::RunStarted {
             run_id: "run-1".to_string(),
             run_mode: "default".to_string(),
+            started_at_ms: 0,
         };
         assert_eq!(
             sidebar_status_for_runtime_event(&event, false),
@@ -1816,6 +1821,7 @@ pub(super) mod tests {
             ThreadStreamEvent::RunStarted {
                 run_id: "r".to_string(),
                 run_mode: "default".to_string(),
+                started_at_ms: 0,
             },
             ThreadStreamEvent::RunRetrying {
                 run_id: "r".to_string(),
@@ -1903,5 +1909,116 @@ pub(super) mod tests {
                 event
             );
         }
+    }
+
+    // ── Plan-approval profile-switching tests ──────────────────────────
+
+    use crate::core::agent_run_manager::AgentRunManager;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::SqlitePool;
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("failed to create in-memory pool");
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .expect("migrations failed");
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-1', 'ws', '/tmp', '/tmp', '/tmp', 0, 0, 0, 'ready',
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed workspace");
+        pool
+    }
+
+    async fn seed_thread(pool: &SqlitePool, thread_id: &str, profile_id: Option<&str>) {
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, profile_id,
+                    created_at, updated_at, last_active_at)
+             VALUES (?, 'ws-1', 'Test Thread', 'idle', ?,
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .bind(thread_id)
+        .bind(profile_id)
+        .execute(pool)
+        .await
+        .expect("seed thread");
+    }
+
+    fn frozen_plan(profile_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "profileId": profile_id,
+            "primary": { "modelDisplayName": "Frozen Model" }
+        })
+    }
+
+    #[tokio::test]
+    async fn resolve_model_plan_uses_frozen_when_thread_has_no_profile() {
+        let pool = setup_test_pool().await;
+        seed_thread(&pool, "thread-no-profile", None).await;
+
+        let plan = frozen_plan("profile-frozen");
+        let resolved = AgentRunManager::resolve_implementation_model_plan(
+            &pool,
+            plan.clone(),
+            Some("profile-frozen".to_string()),
+            "thread-no-profile",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resolved, plan);
+    }
+
+    #[tokio::test]
+    async fn resolve_model_plan_uses_frozen_when_profiles_match() {
+        let pool = setup_test_pool().await;
+        seed_thread(&pool, "thread-same", Some("profile-1")).await;
+
+        let plan = frozen_plan("profile-1");
+        let resolved = AgentRunManager::resolve_implementation_model_plan(
+            &pool,
+            plan.clone(),
+            Some("profile-1".to_string()),
+            "thread-same",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resolved, plan);
+    }
+
+    #[tokio::test]
+    async fn resolve_model_plan_falls_back_to_frozen_when_rebuild_fails() {
+        let pool = setup_test_pool().await;
+        // Thread references a profile that does not exist — build_model_plan_from_profile
+        // returns an error, and the fallback logic should return the frozen plan.
+        seed_thread(&pool, "thread-different", Some("missing-profile")).await;
+
+        let plan = frozen_plan("profile-frozen");
+        let resolved = AgentRunManager::resolve_implementation_model_plan(
+            &pool,
+            plan.clone(),
+            Some("profile-frozen".to_string()),
+            "thread-different",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resolved, plan);
     }
 }

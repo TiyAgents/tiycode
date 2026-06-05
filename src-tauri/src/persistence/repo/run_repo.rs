@@ -62,20 +62,59 @@ pub async fn insert(pool: &SqlitePool, r: &RunInsert) -> Result<(), AppError> {
 }
 
 pub async fn update_status(pool: &SqlitePool, id: &str, status: RunStatus) -> Result<(), AppError> {
-    if status.is_terminal() {
+    let is_entering_running = status == RunStatus::Running;
+    let is_terminal = status.is_terminal();
+
+    if is_terminal {
+        // Terminal: settle any open running segment, set finished_at.
         let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE thread_runs SET status = ?, finished_at = ? WHERE id = ?")
-            .bind(status.as_str())
-            .bind(&now)
-            .bind(id)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "UPDATE thread_runs SET \
+                status = ?, \
+                elapsed_running_secs = elapsed_running_secs + \
+                    CASE WHEN running_since IS NOT NULL \
+                         THEN CAST(strftime('%s', 'now') - strftime('%s', running_since) AS INTEGER) \
+                         ELSE 0 END, \
+                running_since = NULL, \
+                finished_at = ? \
+             WHERE id = ?",
+        )
+        .bind(status.as_str())
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    } else if is_entering_running {
+        // Entering Running: record running_since if not already set (idempotent).
+        sqlx::query(
+            "UPDATE thread_runs SET \
+                status = ?, \
+                running_since = CASE WHEN running_since IS NULL \
+                                     THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                                     ELSE running_since END \
+             WHERE id = ?",
+        )
+        .bind(status.as_str())
+        .bind(id)
+        .execute(pool)
+        .await?;
     } else {
-        sqlx::query("UPDATE thread_runs SET status = ? WHERE id = ?")
-            .bind(status.as_str())
-            .bind(id)
-            .execute(pool)
-            .await?;
+        // Leaving Running (→ WaitingApproval / NeedsReply / WaitingToolResult etc.)
+        // or non-Running → non-Running: settle any open running segment.
+        sqlx::query(
+            "UPDATE thread_runs SET \
+                status = ?, \
+                elapsed_running_secs = elapsed_running_secs + \
+                    CASE WHEN running_since IS NOT NULL \
+                         THEN CAST(strftime('%s', 'now') - strftime('%s', running_since) AS INTEGER) \
+                         ELSE 0 END, \
+                running_since = NULL \
+             WHERE id = ?",
+        )
+        .bind(status.as_str())
+        .bind(id)
+        .execute(pool)
+        .await?;
     }
 
     Ok(())
@@ -360,6 +399,7 @@ fn extract_primary_model_details(
 mod tests {
     use super::*;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::Row;
     use std::str::FromStr;
 
     async fn setup_test_pool() -> SqlitePool {
@@ -457,6 +497,25 @@ mod tests {
             .execute(pool)
             .await
             .expect("set finished_at");
+    }
+
+    async fn set_run_elapsed_tracking(
+        pool: &SqlitePool,
+        id: &str,
+        elapsed_running_secs: i64,
+        running_since: Option<&str>,
+    ) {
+        sqlx::query(
+            "UPDATE thread_runs
+             SET elapsed_running_secs = ?, running_since = ?
+             WHERE id = ?",
+        )
+        .bind(elapsed_running_secs)
+        .bind(running_since)
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("set elapsed tracking");
     }
 
     #[tokio::test]
@@ -575,6 +634,134 @@ mod tests {
             .unwrap()
             .expect("should exist");
         assert_eq!(found.status, "waiting_approval");
+    }
+
+    // ── Elapsed-time transition tests ──────────────────────────────────
+
+    #[tokio::test]
+    async fn update_status_entering_running_sets_running_since_when_null() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 0, None).await;
+
+        update_status(&pool, "run-1", RunStatus::Running)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<i64, _>("elapsed_running_secs"), 0);
+        assert!(
+            row.get::<Option<String>, _>("running_since").is_some(),
+            "running_since should be set when entering Running from idle"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_entering_running_is_idempotent_for_running_since() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 10, Some("2026-01-01T00:00:00Z")).await;
+
+        update_status(&pool, "run-1", RunStatus::Running)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<i64, _>("elapsed_running_secs"), 10);
+        assert_eq!(
+            row.get::<String, _>("running_since"),
+            "2026-01-01T00:00:00Z",
+            "running_since should not be overwritten when entering Running again"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_leaving_running_accumulates_elapsed_and_clears_running_since() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 15, Some("2026-01-01T00:00:00Z")).await;
+
+        update_status(&pool, "run-1", RunStatus::WaitingApproval)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            row.get::<i64, _>("elapsed_running_secs") > 15,
+            "elapsed should accumulate the open running_since segment"
+        );
+        assert!(
+            row.get::<Option<String>, _>("running_since").is_none(),
+            "running_since should be cleared when leaving Running"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_non_running_to_terminal_sets_finished_at_and_preserves_elapsed() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 20, None).await;
+
+        update_status(&pool, "run-1", RunStatus::Completed)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since, finished_at FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            row.get::<i64, _>("elapsed_running_secs"),
+            20,
+            "elapsed should not change when no running segment is open"
+        );
+        assert!(row.get::<Option<String>, _>("running_since").is_none());
+        assert!(
+            row.get::<Option<String>, _>("finished_at").is_some(),
+            "finished_at should be set for terminal status"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_running_to_terminal_accumulates_elapsed_and_sets_finished_at() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 10, Some("2026-01-01T00:00:00Z")).await;
+
+        update_status(&pool, "run-1", RunStatus::Failed)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT elapsed_running_secs, running_since, finished_at, status FROM thread_runs WHERE id = 'run-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            row.get::<i64, _>("elapsed_running_secs") > 10,
+            "elapsed should include the open running_since segment"
+        );
+        assert!(row.get::<Option<String>, _>("running_since").is_none());
+        assert!(row.get::<Option<String>, _>("finished_at").is_some());
+        assert_eq!(row.get::<String, _>("status"), "failed");
     }
 
     #[tokio::test]
@@ -911,6 +1098,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_thread_elapsed_running_seconds_includes_terminal_runs() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-completed", "t1", "2026-04-22T09:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-completed", 37, None).await;
+
+        let values =
+            super::list_thread_elapsed_running_seconds_by_threads(&pool, &["t1".to_string()])
+                .await
+                .unwrap();
+
+        assert_eq!(values.get("t1"), Some(&37));
+    }
+
+    #[tokio::test]
+    async fn list_thread_elapsed_running_seconds_sums_multiple_runs() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-1", "t1", "2026-04-22T09:00:00Z", 0).await;
+        insert_run_with_started_at(&pool, "run-2", "t1", "2026-04-22T10:00:00Z", 0).await;
+        insert_run_with_started_at(&pool, "run-other", "t2", "2026-04-22T11:00:00Z", 0).await;
+        set_run_elapsed_tracking(&pool, "run-1", 12, None).await;
+        set_run_elapsed_tracking(&pool, "run-2", 30, None).await;
+        set_run_elapsed_tracking(&pool, "run-other", 999, None).await;
+
+        let values = super::list_thread_elapsed_running_seconds_by_threads(
+            &pool,
+            &["t1".to_string(), "t2".to_string()],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(values.get("t1"), Some(&42));
+        assert_eq!(values.get("t2"), Some(&999));
+    }
+
+    #[tokio::test]
+    async fn list_thread_elapsed_running_seconds_adds_open_running_segment() {
+        let pool = setup_test_pool().await;
+        insert_run_with_started_at(&pool, "run-running", "t1", "2026-04-22T09:00:00Z", 0).await;
+        super::update_status(&pool, "run-running", RunStatus::Running)
+            .await
+            .unwrap();
+        set_run_elapsed_tracking(&pool, "run-running", 20, Some("2026-04-22T09:00:00Z")).await;
+
+        let values =
+            super::list_thread_elapsed_running_seconds_by_threads(&pool, &["t1".to_string()])
+                .await
+                .unwrap();
+        let elapsed = values.get("t1").copied().expect("thread elapsed");
+
+        assert!(
+            elapsed > 20,
+            "expected running segment to be added, got {elapsed}"
+        );
+    }
+
+    #[tokio::test]
     async fn get_active_run_elapsed_seconds_returns_positive_for_running() {
         let pool = setup_test_pool().await;
         // Insert a running run with a past started_at so elapsed > 0
@@ -1026,4 +1269,89 @@ pub async fn get_active_run_elapsed_seconds(
     .await?
     .flatten();
     Ok(duration)
+}
+
+/// Bulk-fetch the Unix-millisecond start timestamp of the currently active
+/// (non-terminal) run for each thread in `thread_ids`. Threads without an
+/// active run are simply absent from the returned map. Used by the sidebar
+/// query so the frontend can derive per-thread elapsed time from a source
+/// of truth that survives app restarts (`thread_runs.started_at`).
+pub async fn list_active_run_started_at_ms_by_threads(
+    pool: &SqlitePool,
+    thread_ids: &[String],
+) -> Result<std::collections::HashMap<String, i64>, AppError> {
+    if thread_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    // `IN (?, ?, …)` with a single bind argument per id. Keeps the query
+    // shape easy to read; thread_ids is bounded by the sidebar page size.
+    let placeholders = std::iter::repeat("?")
+        .take(thread_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT thread_id, CAST(strftime('%s', started_at) AS INTEGER) * 1000 AS started_at_ms
+         FROM (
+             SELECT thread_id, MAX(started_at) AS started_at FROM thread_runs
+             WHERE thread_id IN ({placeholders})
+               AND status NOT IN ('completed','failed','denied','interrupted','cancelled','limit_reached')
+             GROUP BY thread_id
+         )",
+    );
+    let mut query = sqlx::query_as::<_, (String, i64)>(&sql);
+    for id in thread_ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Batch-query thread-level cumulative active running seconds (excluding
+/// pauses) for each requested thread. The total includes all historical runs'
+/// `elapsed_running_secs`; if any run is currently running, its open
+/// `running_since` segment is included as `now() - running_since`.
+pub async fn list_thread_elapsed_running_seconds_by_threads(
+    pool: &SqlitePool,
+    thread_ids: &[String],
+) -> Result<std::collections::HashMap<String, i64>, AppError> {
+    if thread_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(thread_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT thread_id,
+                SUM(
+                    elapsed_running_secs +
+                    CASE WHEN running_since IS NOT NULL
+                         THEN CAST(strftime('%s', 'now') - strftime('%s', running_since) AS INTEGER)
+                         ELSE 0
+                    END
+                ) AS elapsed_secs
+         FROM thread_runs
+         WHERE thread_id IN ({placeholders})
+         GROUP BY thread_id",
+    );
+    let mut query = sqlx::query_as::<_, (String, i64)>(&sql);
+    for id in thread_ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Batch-query the cumulative **active running seconds** (excluding pauses)
+/// used by the thread header timer. This is intentionally thread-level rather
+/// than active-run-only so completed/interrupted history survives restarts and
+/// later runs continue from the prior thread total.
+#[deprecated(
+    note = "use list_thread_elapsed_running_seconds_by_threads for thread header timer seeds"
+)]
+pub async fn list_active_run_elapsed_seconds_by_threads(
+    pool: &SqlitePool,
+    thread_ids: &[String],
+) -> Result<std::collections::HashMap<String, i64>, AppError> {
+    list_thread_elapsed_running_seconds_by_threads(pool, thread_ids).await
 }

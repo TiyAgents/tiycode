@@ -35,6 +35,8 @@ function makeSnapshot(activeStatus: RunStatus | null): ThreadSnapshotDto {
       status: activeStatus ? "running" : "idle",
       lastActiveAt: "2026-04-22T00:00:00Z",
       createdAt: "2026-04-22T00:00:00Z",
+      activeRunStartedAtMs: null,
+      activeRunElapsedSeconds: null,
     },
     messages: [],
     hasMoreMessages: false,

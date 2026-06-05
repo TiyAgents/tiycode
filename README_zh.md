@@ -2,7 +2,7 @@
   <img src="./public/app-icon.png" alt="TiyCode 标志" width="120" />
   <h1>TiyCode（钛可）</h1>
   <p><strong>一款践行 AI First 理念的 desktop coding agent。</strong></p>
-  <p>面向新一代编码协作范式而设计。人通过对话表达目标、约束与反馈，Agent 主导理解、执行与推进工作。</p>
+  <p>面向新一代编码协作范式而设计。人只需通过对话表达目标、约束与反馈，Agent 主导理解、执行与推进工作。</p>
   <p>
     <a href="./README.md">English</a>
   </p>
@@ -28,15 +28,20 @@ TiyCode 面向的是希望以 AI 时代的方式进行编码协作的用户。�
 
 - **AI First 的编码协作。** TiyCode 围绕"通过对话表达意图，Agent 全面执行"这一理念来设计产品形态。
 - **Agent Profile。** 支持自由组合不同服务商的模型，并可配置回复风格、回复语言、自定义指令等设定，且能在不同 Profile 之间灵活切换。
+- **Custom Agents。** 在设置中心创建专用子 Agent——每个拥有独立的名称、系统提示、模型层级和可用工具——按 Profile 授权后即可从 composer 委派任务。
 - **三层模型架构。** 每个 Profile 支持配置 Primary 主力模型、Auxiliary 辅助模型和 Lightweight 轻量模型三个层级，层级之间具备自动回退链路。
 - **多服务商接入。** 开箱支持 13+ 家 LLM 服务商 —— OpenAI、Anthropic、Google、Ollama、xAI、Groq、OpenRouter、DeepSeek、MiniMax、Kimi 等，也可将任何 OpenAI 兼容端点作为自定义 Provider 接入。
 - **以工作区为中心的执行体验。** 对话线程扎根本地工作区，并与代码审阅、版本控制、仓库状态读取、Git worktree 和 Terminal 工作流自然衔接。
 - **面向任务的执行可观测性。** Thread 级任务板、Plan checkpoint、工具状态事件和子 Agent 进度让长任务更容易跟踪和复查。
+- **持久化目标管理。** 为 Agent 设置跨轮次的长期目标，支持自动延续、预算控制和进度跟踪。
 - **更丰富的输入能力。** Prompt 输入支持文本、文件 / 图片附件、截图、Slash Command 结构化参数插值（`--key=value`、位置参数、`{{placeholder}}` 模板变量）以及大段文本粘贴处理。
+- **Steer 与 Queue。** Agent 运行中可选择「引导」即时插入消息调整方向，或「排队」将消息留待当前运行结束后再发起下一轮——无需中断工作流即可保持掌控。
 - **实时执行流式推送。** 丰富的 Thread Stream 事件体系支撑实时更新 —— 消息增量、工具调用、requested / active 状态、推理步骤、子 Agent 进度与计划更新。
 - **更友好的日常体验。** 支持结构化参数解析的 Slash Command、智能会话标题、上下文压缩、Commit Message 生成、包含 Ghostty 在内的外部终端衔接以及紧凑工作台控件，让协作过程更顺手、更连贯。
+- **线程级别耗时计时器。** 跟踪每个线程的活跃执行时间，排除暂停时间，并支持跨会话持久化跟踪。
 - **双语界面。** 完整的 i18n 支持，覆盖英文和简体中文，随时可切换。
 - **ACP Server 支持。** TiyCode 可作为无头 ACP（Agent Client Protocol）服务器运行，通过 `tiycode acp --stdio` 或 `tiycode acp --http <addr>` 启动，让外部工具和 IDE 插件通过标准 JSON-RPC 协议驱动 Agent 运行时，无需启动桌面 GUI。
+- **IM 通道网关。** 将 TiyCode 接入微信或企业微信，扫码登录后即可在聊天应用中直接与 Agent 对话——发送消息和附件、接收流式回复，无需打开桌面 GUI。
 - **良好的通用扩展能力。** Plugins、MCP Servers 与 Skills 通过 `Extensions Center` 形成统一的扩展入口与产品模型。
 - **内置 Runtime。** 主执行链路 `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`。
 
@@ -117,115 +122,6 @@ npm run typecheck
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
-
-## Shell 环境配置
-
-TiyCode 内置的 Agent Shell 可能以 **非交互、非登录** 模式启动。在该模式下，只有最基础的系统路径（如 `/usr/bin:/bin`）可用。通过版本管理器安装的工具（如 `node`、`npm`、`bun`、`cargo`、`go`）将无法被识别，需要正确配置 Shell 启动文件才能解决。
-
-### Shell 配置文件加载规则
-
-不同的 Shell 调用模式会加载不同的配置文件。下表列出了各模式下的加载情况：
-
-**Zsh（macOS 默认 / Linux）**
-
-| 文件 | 非交互 | 登录 | 交互 | 交互 + 登录 |
-|------|:-:|:-:|:-:|:-:|
-| `~/.zshenv` | ✅ | ✅ | ✅ | ✅ |
-| `~/.zprofile` | ❌ | ✅ | ❌ | ✅ |
-| `~/.zshrc` | ❌ | ❌ | ✅ | ✅ |
-
-**Bash（Linux 默认）**
-
-| 文件 | 非交互 | 登录 | 交互 | 交互 + 登录 |
-|------|:-:|:-:|:-:|:-:|
-| `~/.bashrc` | ❌ | ❌ | ✅ | ❌ ¹ |
-| `~/.bash_profile` | ❌ | ✅ | ❌ | ✅ |
-| `$BASH_ENV` | ✅ | ❌ | ❌ | ❌ |
-
-<sub>¹ 大多数发行版会在 `~/.bash_profile` 中 source `~/.bashrc`，因此实际上登录 shell 也会执行它。</sub>
-
-TiyCode 的 Agent Shell 属于 **非交互** 一列 —— 只有 `~/.zshenv`（zsh）或 `$BASH_ENV`（bash）能保证被加载。
-
-### 解决方法：确保所有 Shell 模式都能加载环境变量
-
-<details>
-<summary><strong>macOS / Linux（Zsh）</strong></summary>
-
-1. **将所有 `export` 语句和 PATH 修改** 从 `~/.zshrc` 移到 `~/.zprofile`。仅将交互式配置（alias、补全、oh-my-zsh、主题、提示符）留在 `~/.zshrc` 中。
-
-2. **在 `~/.zshenv` 中 source `~/.zprofile`**，使非交互式 shell 也能获取环境变量：
-
-```bash
-# ~/.zshenv
-if [ -z "$__ZPROFILE_LOADED" ] && [ -f "$HOME/.zprofile" ]; then
-  export __ZPROFILE_LOADED=1
-  source "$HOME/.zprofile"
-fi
-```
-
-`__ZPROFILE_LOADED` 守卫变量可防止在「登录 + 交互」模式下重复加载。
-
-常见需要移入 `~/.zprofile` 的内容：
-
-```bash
-# ~/.zprofile — 示例
-eval "$(/opt/homebrew/bin/brew shellenv)"           # Homebrew（macOS）
-export NVM_DIR="$HOME/.nvm"                         # nvm（Node.js）
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-export BUN_INSTALL="$HOME/.bun"                     # Bun
-export PATH="$BUN_INSTALL/bin:$PATH"
-. "$HOME/.local/bin/env"                            # Rust / Cargo
-export PATH="/usr/local/go/bin:$PATH"               # Go
-```
-
-</details>
-
-<details>
-<summary><strong>Linux（Bash）</strong></summary>
-
-1. 将环境变量保留在 `~/.bash_profile`（或 `~/.profile`）中。
-2. 设置 `BASH_ENV` 指向一个会 source 你的 profile 的文件：
-
-```bash
-# ~/.bash_profile — 在顶部添加：
-export BASH_ENV="$HOME/.bash_env"
-```
-
-```bash
-# ~/.bash_env — 新文件
-if [ -z "$__BASH_PROFILE_LOADED" ] && [ -f "$HOME/.bash_profile" ]; then
-  export __BASH_PROFILE_LOADED=1
-  source "$HOME/.bash_profile"
-fi
-```
-
-</details>
-
-<details>
-<summary><strong>Windows（PowerShell）</strong></summary>
-
-在 Windows 上，TiyCode 通常会继承通过 **系统设置 > 环境变量** 配置的系统和用户环境变量。如果你通过官方安装器安装了 Node.js、Rust 等工具，它们应该已经在 PATH 中。
-
-如果你使用的是版本管理器（如 **nvm-windows**、**fnm** 或 **volta**），请确保 shim 目录已添加到系统环境变量中的 **用户 PATH**，而不是仅在 PowerShell profile 中设置。
-
-验证当前 PATH：
-
-```powershell
-$env:PATH -split ';'
-```
-
-</details>
-
-### 配置后验证
-
-更新 Shell 配置文件后，**重启 TiyCode**（完全退出后重新启动，而非仅开启新会话），然后让 Agent 执行：
-
-```
-echo $PATH
-which <你的工具>   # 例如 node、cargo、go、bun、python ...
-```
-
-如果输出中包含预期的路径且工具能被找到，说明环境配置已生效。
 
 ## 架构速览
 

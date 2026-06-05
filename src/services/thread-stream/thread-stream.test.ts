@@ -100,7 +100,7 @@ describe("ThreadStream event routing", () => {
     stream.onUsage = onUsage;
 
     threadStartRunMock.mockImplementationOnce(emit([
-      { type: "run_started", runId: "run-1", runMode: "default" },
+      { type: "run_started", runId: "run-1", runMode: "default", startedAtMs: 0 },
       { type: "message_delta", runId: "run-1", messageId: "msg-1", delta: "hi" },
       { type: "message_completed", runId: "run-1", messageId: "msg-1", content: "hi!" },
       { type: "plan_updated", runId: "run-1", plan: { steps: ["a"] } },
@@ -566,7 +566,7 @@ describe("ThreadStream uncovered events", () => {
       onEvent: (event: ThreadStreamEvent) => void,
     ) => {
       for (const event of [
-        { type: "run_started", runId: "run-1", runMode: "default" } as const,
+        { type: "run_started", runId: "run-1", runMode: "default", startedAtMs: 0 } as const,
         { type: "tool_requested", runId: "run-1", toolCallId: "tool-reused", toolName: "agent_review", toolInput: {} } as const,
         terminalEvent,
         { type: "tool_requested", runId: "run-2", toolCallId: "tool-reused", toolName: "read", toolInput: { path: "README.md" } } as const,
@@ -600,7 +600,7 @@ describe("ThreadStream uncovered events", () => {
     stream.onToolEvent = onToolEvent;
 
     threadStartRunMock.mockImplementationOnce(emit([
-      { type: "run_started", runId: "run-1", runMode: "default" },
+      { type: "run_started", runId: "run-1", runMode: "default", startedAtMs: 0 },
       { type: "tool_requested", runId: "run-1", toolCallId: "tool-reused", toolName: "agent_review", toolInput: {} },
     ]));
 
