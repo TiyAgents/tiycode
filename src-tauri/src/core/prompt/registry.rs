@@ -4,8 +4,8 @@ use super::active_goal_source::ActiveGoalSource;
 use super::active_plan_source::ActivePlanSource;
 use super::compaction_contract_source::CompactionContractSource;
 use super::layer::{LayerResolver, PromptLayer, SectionAnchor, SectionOrder};
-use super::legacy_adapter::{LegacyProfileInstructionsSource, SubagentBodySource};
-use super::providers::ProfileProvider;
+use super::legacy_adapter::SubagentBodySource;
+use super::profile_instructions_source::ProfileInstructionsSource;
 use super::section_id::SectionId;
 use super::section_source::{SectionCriticality, SectionSpec};
 use super::skills_source::SkillsSource;
@@ -136,13 +136,9 @@ pub fn default_registry() -> SectionRegistry {
     });
 
     // ── SessionStable (was Capability + WorkspacePreference) ─────────
-    // NOTE (Stage 5 follow-up, see docs/prompt-injection-refactor.md § 4):
-    //   Skills, ProjectContext, SystemEnvironment, SandboxPermissions, RunMode,
-    //   ProfileInstructions, WorkspaceLocation still use Legacy*Source adapters.
-    //   The .md templates exist (skills_usage.md, sandbox_permissions.tpl.md,
-    //   run_mode.{plan,default}.md, etc.) but are NOT byte-equal to legacy output —
-    //   migrating each requires careful template-vs-legacy diff and explicit
-    //   approval. Tracking issue: byte-equal alignment per § 4 阶段 1 + 5.
+    // NOTE: Stage 5 migration is complete. All sections now use direct,
+    // template-backed or self-contained sources. No Legacy adapters remain.
+    // See docs/prompt-injection-refactor.md § 4.
     registry.register(SectionSpec {
         id: SectionId::ShellToolingGuide,
         title: Cow::Borrowed("Shell Tooling Guide"),
@@ -211,7 +207,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(LegacyProfileInstructionsSource(ProfileProvider)),
+        source: Box::new(ProfileInstructionsSource),
     });
 
     // ── RuntimeOverlay (was RuntimeContext) ──────────────────────────

@@ -1,7 +1,7 @@
 ---
 section_id: SkillsUsage
 version: 1
-declared_keys: []
+declared_keys: [skills_list]
 ---
 A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.
 

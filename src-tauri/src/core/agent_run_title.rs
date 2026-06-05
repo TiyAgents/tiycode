@@ -306,21 +306,8 @@ pub(crate) fn build_title_prompt_from_messages(
     response_language: Option<&str>,
     response_style: ProfileResponseStyle,
 ) -> String {
-    let language_rule = match response_language {
-        Some(language) => format!("- Write the title in {language}."),
-        None => "- Match the conversation language.".to_string(),
-    };
-    let style_rule = match response_style {
-        ProfileResponseStyle::Balanced => {
-            "- Keep the title clear and natural, with enough specificity to scan quickly."
-        }
-        ProfileResponseStyle::Concise => {
-            "- Keep the title especially terse, direct, and low-friction."
-        }
-        ProfileResponseStyle::Guide => {
-            "- Prefer a title that signals the user's goal or decision focus clearly."
-        }
-    };
+    let language_rule = super::agent_session_types::format_title_language_rule(response_language);
+    let style_rule = super::agent_session_types::format_title_style_rule(response_style);
 
     let mut conversation = String::new();
     // Messages are in chronological order (oldest first); iterate in reverse

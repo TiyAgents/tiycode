@@ -4,6 +4,7 @@ pub mod active_plan_source;
 pub mod assembler;
 pub mod compaction_contract_source;
 pub mod context;
+pub mod profile_instructions_source;
 pub mod providers;
 pub mod section;
 pub mod skills_source;

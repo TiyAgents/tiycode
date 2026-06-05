@@ -378,4 +378,120 @@ mod tests {
             assert_eq!(tmpl.section_id, *expected_id, "section_id mismatch");
         }
     }
+
+    /// Lint: every `{{key}}` placeholder in a template body must be declared
+    /// in the front-matter `declared_keys`, and every declared key must appear
+    /// in the body at least once. This prevents silently-ignored typos and
+    /// stale declarations after template edits.
+    #[test]
+    fn templates_have_no_undeclared_keys() {
+        let template_dir = super::template_root();
+        assert!(
+            template_dir.exists(),
+            "template directory not found: {}",
+            template_dir.display()
+        );
+
+        let mut failures = Vec::new();
+        visit_templates(&template_dir, &mut failures);
+
+        if !failures.is_empty() {
+            panic!(
+                "{} template key declaration mismatch(es):\n{}",
+                failures.len(),
+                failures.join("\n")
+            );
+        }
+    }
+
+    /// Recursively walk the template directory and check each .md file.
+    fn visit_templates(dir: &std::path::Path, failures: &mut Vec<String>) {
+        let entries = std::fs::read_dir(dir).unwrap_or_else(|e| {
+            panic!("failed to read template dir {}: {}", dir.display(), e);
+        });
+
+        for entry in entries {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                visit_templates(&path, failures);
+            } else if path.extension().map_or(false, |ext| ext == "md") {
+                check_template(&path, failures);
+            }
+        }
+    }
+
+    /// Validate a single template file: declared_keys must match actual {{key}} usage.
+    fn check_template(path: &std::path::Path, failures: &mut Vec<String>) {
+        let raw = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!("failed to read template {}: {}", path.display(), e);
+        });
+
+        let (template, body) = match super::parse_front_matter(&raw) {
+            Ok(t) => t,
+            Err(e) => {
+                failures.push(format!("  {} — parse error: {}", path.display(), e));
+                return;
+            }
+        };
+
+        let actual_keys = extract_placeholders(&body);
+        let declared_keys: Vec<String> = template.declared_keys;
+
+        let rel_path = path
+            .strip_prefix(super::template_root())
+            .unwrap_or(path)
+            .display();
+
+        // Forward: every declared key must appear in the body
+        for declared in &declared_keys {
+            if !actual_keys.contains(declared) {
+                failures.push(format!(
+                    "  {} — declared key '{}' not found in template body",
+                    rel_path, declared
+                ));
+            }
+        }
+
+        // Reverse: every {{key}} in body must be declared in front-matter
+        for actual in &actual_keys {
+            if !declared_keys.contains(actual) {
+                failures.push(format!(
+                    "  {} — undeclared key '{}' used in body (add to front-matter declared_keys)",
+                    rel_path, actual
+                ));
+            }
+        }
+    }
+
+    /// Extract all `{{key}}` placeholder names from a template body.
+    fn extract_placeholders(body: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut i = 0;
+        let bytes = body.as_bytes();
+
+        while i < bytes.len() {
+            if bytes[i] == b'{'
+                && i + 1 < bytes.len()
+                && bytes[i + 1] == b'{'
+            {
+                // Found "{{"
+                let start = i + 2;
+                // Look for "}}"
+                if let Some(end) = body[start..].find("}}") {
+                    let key = body[start..start + end].trim();
+                    if !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        keys.push(key.to_string());
+                    }
+                    i = start + end + 2;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+
+        keys.sort();
+        keys.dedup();
+        keys
+    }
 }

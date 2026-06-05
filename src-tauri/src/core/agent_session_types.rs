@@ -237,6 +237,31 @@ pub fn response_style_system_instruction(style: ProfileResponseStyle) -> &'stati
     }
 }
 
+/// Shared formatting for title-generation language rule line.
+/// Used by both ProfileInstructionsSource and build_title_prompt_from_messages
+/// to avoid duplicate language-rule text.
+pub fn format_title_language_rule(response_language: Option<&str>) -> String {
+    match response_language {
+        Some(language) => format!("- Write the title in {language}."),
+        None => "- Match the conversation language.".to_string(),
+    }
+}
+
+/// Shared formatting for title-generation style rule line.
+pub fn format_title_style_rule(style: ProfileResponseStyle) -> &'static str {
+    match style {
+        ProfileResponseStyle::Balanced => {
+            "- Keep the title clear and natural, with enough specificity to scan quickly."
+        }
+        ProfileResponseStyle::Concise => {
+            "- Keep the title especially terse, direct, and low-friction."
+        }
+        ProfileResponseStyle::Guide => {
+            "- Prefer a title that signals the user's goal or decision focus clearly."
+        }
+    }
+}
+
 pub(crate) fn parse_positive_u32(value: Option<&str>, fallback: u32) -> u32 {
     value
         .and_then(|value| value.trim().parse::<u32>().ok())

@@ -3,49 +3,7 @@ use async_trait::async_trait;
 use crate::core::subagent::SubagentProfile;
 
 use super::build_context::BuildCx;
-use super::context::PromptBuildContext;
-use super::providers::ProfileProvider;
-use super::section::PromptSectionProvider;
 use super::section_source::{FatalError, SectionBody, SectionMeta, SectionOutcome, SectionSource};
-
-// ---------------------------------------------------------------------------
-// Legacy adapter for ProfileInstructions, the only section that still depends
-// on dynamic PromptSectionProvider logic (ProfileProvider).
-// ---------------------------------------------------------------------------
-
-pub struct LegacyProfileInstructionsSource(pub ProfileProvider);
-
-#[async_trait]
-impl SectionSource for LegacyProfileInstructionsSource {
-    async fn build(&self, cx: &BuildCx<'_>) -> Result<SectionOutcome, FatalError> {
-        let raw_plan = match cx.raw_plan {
-            Some(plan) => plan,
-            None => return Ok(SectionOutcome::Skip),
-        };
-        let old_ctx = PromptBuildContext::new(
-            cx.pool,
-            raw_plan,
-            cx.workspace_path,
-            cx.run_mode.as_str(),
-        );
-
-        let sections = self
-            .0
-            .collect(&old_ctx)
-            .await
-            .map_err(|e| FatalError::new("legacy.provider", e.to_string()))?;
-
-        match sections
-            .into_iter()
-            .find(|s| s.key == "profile_instructions")
-        {
-            Some(section) if !section.body.trim().is_empty() => {
-                Ok(SectionOutcome::Produced(SectionBody::markdown(section.body)))
-            }
-            _ => Ok(SectionOutcome::Skip),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SubagentBodySource: loads template-backed subagent body for Explore/Review;

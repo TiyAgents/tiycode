@@ -1,7 +1,7 @@
 ---
 section_id: ActiveGoal
 version: 1
-declared_keys: []
+declared_keys: [max_turns, objective, turns_used]
 ---
 **You have an active goal. This takes priority over other instructions.**
 
