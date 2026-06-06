@@ -53,28 +53,13 @@ fn resolve_helper_tool_task(
     tool: RuntimeOrchestrationTool,
     tool_input: &serde_json::Value,
 ) -> Result<HelperToolTask, String> {
-    if tool == RuntimeOrchestrationTool::Review {
-        let request = ReviewRequest::from_tool_input(tool_input)?;
-        return Ok(HelperToolTask {
-            task: request.to_helper_prompt(),
-            review_request: Some(request),
-        });
-    }
-
-    let task = tool_input
-        .get("task")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-
-    if task.is_empty() {
-        return Err("missing helper task".to_string());
-    }
-
+    // Shares the task/review-request extraction with the recursive subagent
+    // delegation path to avoid divergent prompt construction.
+    let (task, review_request) =
+        crate::core::subagent::orchestrator::resolve_delegation_task(&tool, tool_input)?;
     Ok(HelperToolTask {
         task,
-        review_request: None,
+        review_request,
     })
 }
 
@@ -965,7 +950,6 @@ impl AgentSession {
                 parent_tool_call_id: Some(parent_tool_call_id.to_string()),
                 task: delegate.task.clone(),
                 model_role: delegate.model_role.clone(),
-                system_prompt: self.spec.system_prompt.clone(),
                 workspace_path: self.spec.workspace_path.clone(),
                 run_mode: self.spec.run_mode.clone(),
                 event_tx: self.event_tx.clone(),

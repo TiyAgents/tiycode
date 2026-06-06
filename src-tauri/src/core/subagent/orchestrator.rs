@@ -36,7 +36,6 @@ pub struct HelperRunRequest {
     pub parent_tool_call_id: Option<String>,
     pub task: String,
     pub model_role: ResolvedModelRole,
-    pub system_prompt: String,
     pub workspace_path: String,
     pub run_mode: String,
     pub event_tx: tokio::sync::mpsc::UnboundedSender<ThreadStreamEvent>,
@@ -98,9 +97,9 @@ struct ResolvedDelegation {
 }
 
 /// Extract the helper task (and optional structured review request) from a
-/// delegation tool's input. Mirrors `resolve_helper_tool_task` in the main
-/// session so recursive delegations build the same prompts.
-fn resolve_delegation_task(
+/// delegation tool's input. Shared by the main session's `resolve_helper_tool_task`
+/// and the recursive subagent delegation path so both build identical prompts.
+pub(crate) fn resolve_delegation_task(
     tool: &RuntimeOrchestrationTool,
     tool_input: &serde_json::Value,
 ) -> Result<(String, Option<crate::core::subagent::ReviewRequest>), String> {
@@ -834,48 +833,126 @@ impl HelperDelegationContext {
 
     /// Resolve an `agent_parallel` delegation issued by a delegating helper.
     /// Each child task is delegated one level deeper and validated against the
-    /// same depth/capability bounds. Runs sequentially to bound resource usage
-    /// at deeper levels (concurrency is reserved for the top-level orchestrator).
+    /// same depth/capability bounds. Tasks run with bounded concurrency
+    /// (`maxConcurrency`, default/clamped by the parallel contract) using a
+    /// `FuturesUnordered` scheduler, mirroring the top-level orchestrator's
+    /// behaviour so that subagent-issued `agent_parallel` is genuinely parallel
+    /// rather than sequential. Honours `failFast` and the session abort signal.
     async fn handle_parallel_delegation(
         &self,
         tool_input: &serde_json::Value,
         parent_tool_call_id: &str,
     ) -> Result<AgentToolResult, String> {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
         let request = ParallelSubagentRequest::from_tool_input(tool_input)?;
         let child_depth = self.caller_depth.saturating_add(1);
-        let mut summaries = Vec::new();
+        let max_concurrency = request.effective_max_concurrency();
+
+        // Pre-validate each task into either an immediate error (kept with its
+        // index for ordered output) or a queued delegation candidate.
+        let mut indexed_summaries: Vec<(usize, String)> = Vec::new();
+        let mut queued: std::collections::VecDeque<(usize, String, RuntimeOrchestrationTool)> =
+            std::collections::VecDeque::new();
 
         for (index, task) in request.tasks.iter().enumerate() {
             let agent_name = task.agent.trim().to_string();
             let Some(tool) = RuntimeOrchestrationTool::parse(&agent_name) else {
-                summaries.push(format!("[{index}] {agent_name}: unknown subagent tool"));
+                indexed_summaries.push((
+                    index,
+                    format!("[{index}] {agent_name}: unknown subagent tool"),
+                ));
                 continue;
             };
             if tool == RuntimeOrchestrationTool::Parallel {
-                summaries.push(format!(
-                    "[{index}] {agent_name}: agent_parallel cannot delegate to itself"
+                indexed_summaries.push((
+                    index,
+                    format!("[{index}] {agent_name}: agent_parallel cannot delegate to itself"),
                 ));
                 continue;
             }
+            queued.push_back((index, agent_name, tool));
+        }
 
-            match self
-                .resolve_delegation(tool, &task.to_tool_input(), child_depth)
-                .await
-            {
-                Ok(delegation) => match self
-                    .run_child_delegation(delegation, parent_tool_call_id, child_depth)
-                    .await
-                {
-                    Ok(result) => {
-                        summaries.push(format!("[{index}] {agent_name}:\n{}", result.summary))
-                    }
-                    Err(error) => summaries.push(format!("[{index}] {agent_name}: {error}")),
-                },
-                Err(error) => summaries.push(format!("[{index}] {agent_name}: {error}")),
+        let parent_tool_call_id = parent_tool_call_id.to_string();
+        let tasks = &request.tasks;
+
+        // Run one queued delegation, returning (index, succeeded, summary line).
+        let run_one = |index: usize, agent_name: String, tool: RuntimeOrchestrationTool| {
+            let ctx = self.clone();
+            let parent_tool_call_id = parent_tool_call_id.clone();
+            let tool_input = tasks[index].to_tool_input();
+            async move {
+                match ctx.resolve_delegation(tool, &tool_input, child_depth).await {
+                    Ok(delegation) => match ctx
+                        .run_child_delegation(delegation, &parent_tool_call_id, child_depth)
+                        .await
+                    {
+                        Ok(result) => (
+                            index,
+                            true,
+                            format!("[{index}] {agent_name}:\n{}", result.summary),
+                        ),
+                        Err(error) => (index, false, format!("[{index}] {agent_name}: {error}")),
+                    },
+                    Err(error) => (index, false, format!("[{index}] {agent_name}: {error}")),
+                }
+            }
+        };
+
+        let mut active = FuturesUnordered::new();
+        let mut stop_fast = false;
+
+        // Prime the scheduler up to the concurrency limit.
+        while active.len() < max_concurrency {
+            if self.session_abort_signal.is_cancelled() {
+                break;
+            }
+            if let Some((index, agent_name, tool)) = queued.pop_front() {
+                active.push(run_one(index, agent_name, tool));
+            } else {
+                break;
             }
         }
 
-        let summary = summaries.join("\n\n");
+        while let Some((index, succeeded, line)) = active.next().await {
+            indexed_summaries.push((index, line));
+
+            if request.fail_fast && !succeeded {
+                stop_fast = true;
+            }
+
+            if stop_fast || self.session_abort_signal.is_cancelled() {
+                continue;
+            }
+
+            while active.len() < max_concurrency {
+                if let Some((next_index, agent_name, tool)) = queued.pop_front() {
+                    active.push(run_one(next_index, agent_name, tool));
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Any tasks never scheduled (due to failFast or cancellation) are
+        // reported as skipped, preserving their index for ordered output.
+        let skip_reason = if self.session_abort_signal.is_cancelled() {
+            "skipped because the parent run was cancelled"
+        } else {
+            "skipped because failFast stopped scheduling after an earlier failure"
+        };
+        for (index, agent_name, _tool) in queued {
+            indexed_summaries.push((index, format!("[{index}] {agent_name}: {skip_reason}")));
+        }
+
+        indexed_summaries.sort_by_key(|(index, _)| *index);
+        let summary = indexed_summaries
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
         Ok(AgentToolResult {
             content: vec![ContentBlock::Text(TextContent::new(summary.clone()))],
             details: Some(serde_json::json!({ "summary": summary })),
@@ -979,7 +1056,6 @@ impl HelperDelegationContext {
             parent_tool_call_id: Some(parent_tool_call_id.to_string()),
             task: delegation.task,
             model_role: delegation.model_role,
-            system_prompt: String::new(),
             workspace_path: self.workspace_path.clone(),
             run_mode: self.run_mode.clone(),
             event_tx: self.event_tx.clone(),

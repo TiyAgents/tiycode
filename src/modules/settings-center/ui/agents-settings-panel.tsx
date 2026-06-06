@@ -269,6 +269,8 @@ export function AgentsSettingsPanel({
       allowedTools: editState.allowedTools ?? selectedAgent.allowedTools,
       modelRole: editState.modelRole ?? selectedAgent.modelRole ?? "auxiliary",
       isEnabled: editState.isEnabled ?? selectedAgent.isEnabled,
+      canDelegate: editState.canDelegate ?? selectedAgent.canDelegate,
+      maxDelegationDepth: editState.maxDelegationDepth ?? selectedAgent.maxDelegationDepth,
     };
     setEditorErrorMessage(null);
     setIsSaving(true);
@@ -683,6 +685,11 @@ export function AgentsSettingsPanel({
                           <span className="rounded-full border border-app-border bg-app-surface-muted px-2 py-0.5 text-[11px] font-medium text-app-subtle">
                             {modelRoleLabel(agent.modelRole)}
                           </span>
+                          {agent.canDelegate ? (
+                            <span className="rounded-full border border-app-info/30 bg-app-info/10 px-2 py-0.5 text-[11px] font-medium text-app-info">
+                              {t("settings.agents.delegationBadge", { depth: agent.maxDelegationDepth })}
+                            </span>
+                          ) : null}
                           {isSelected && hasUnsavedChanges ? (
                             <span className="rounded-full border border-app-warning/30 bg-app-warning/10 px-2 py-0.5 text-[11px] font-medium text-app-warning">
                               {t("settings.agents.unsaved")}
