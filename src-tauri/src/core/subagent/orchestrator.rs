@@ -1111,4 +1111,150 @@ mod tests {
             "Error: boom"
         );
     }
+
+    // ── build_helper_system_prompt（Phase 7 Composer pipeline）──
+
+    /// Placeholder pool for tests that only exercise template-backed sources
+    /// (no real DB queries required).
+    fn placeholder_pool() -> SqlitePool {
+        sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("placeholder pool")
+    }
+
+    #[tokio::test]
+    async fn build_helper_system_prompt_explore_produces_output() {
+        let pool = placeholder_pool();
+        let result = build_helper_system_prompt(
+            &pool,
+            "/tmp/test",
+            "default",
+            "thread-explore",
+            &SubagentProfile::Explore,
+        )
+        .await
+        .expect("build_helper_system_prompt must succeed for Explore");
+
+        assert!(!result.text.is_empty(), "prompt text must not be empty");
+        assert!(!result.blocks.is_empty(), "prompt blocks must not be empty");
+        assert!(
+            result.text.contains("Role") || result.text.contains("You are"),
+            "subagent prompt must contain Role/persona section"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_helper_system_prompt_review_produces_output() {
+        let pool = placeholder_pool();
+        let result = build_helper_system_prompt(
+            &pool,
+            "/tmp/test",
+            "default",
+            "thread-review",
+            &SubagentProfile::Review,
+        )
+        .await
+        .expect("build_helper_system_prompt must succeed for Review");
+
+        assert!(!result.text.is_empty(), "prompt text must not be empty");
+        assert!(!result.blocks.is_empty(), "prompt blocks must not be empty");
+        assert!(
+            result.text.contains("Role") || result.text.contains("You are"),
+            "subagent prompt must contain Role/persona section"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_helper_system_prompt_custom_produces_output() {
+        let pool = placeholder_pool();
+        let profile = SubagentProfile::Custom {
+            slug: "tester".to_string(),
+            system_prompt: "You are a test helper.".to_string(),
+            allowed_tools: vec!["read".to_string(), "search".to_string()],
+            model_role: crate::model::subagent::CustomSubagentModelRole::Auxiliary,
+        };
+        let result =
+            build_helper_system_prompt(&pool, "/tmp/test", "default", "thread-custom", &profile)
+                .await
+                .expect("build_helper_system_prompt must succeed for Custom");
+
+        assert!(!result.text.is_empty(), "prompt text must not be empty");
+        assert!(!result.blocks.is_empty(), "prompt blocks must not be empty");
+        assert!(
+            result.text.contains("Role") || result.text.contains("You are"),
+            "subagent prompt must contain Role/persona section"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_helper_system_prompt_differs_between_profiles() {
+        let pool = placeholder_pool();
+        let profile_custom = SubagentProfile::Custom {
+            slug: "tester".to_string(),
+            system_prompt: "You are a test helper.".to_string(),
+            allowed_tools: vec!["read".to_string(), "search".to_string()],
+            model_role: crate::model::subagent::CustomSubagentModelRole::Auxiliary,
+        };
+
+        let explore = build_helper_system_prompt(
+            &pool,
+            "/tmp/test",
+            "default",
+            "t1",
+            &SubagentProfile::Explore,
+        )
+        .await
+        .unwrap();
+        let review = build_helper_system_prompt(
+            &pool,
+            "/tmp/test",
+            "default",
+            "t2",
+            &SubagentProfile::Review,
+        )
+        .await
+        .unwrap();
+        let custom =
+            build_helper_system_prompt(&pool, "/tmp/test", "default", "t3", &profile_custom)
+                .await
+                .unwrap();
+
+        // Output must differ between profiles (different surfaces produce
+        // different section sets).
+        assert_ne!(
+            explore.text, review.text,
+            "Explore and Review prompts must differ"
+        );
+        assert_ne!(
+            explore.text, custom.text,
+            "Explore and Custom prompts must differ"
+        );
+        assert_ne!(
+            review.text, custom.text,
+            "Review and Custom prompts must differ"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_helper_system_prompt_excludes_main_agent_sections() {
+        let pool = placeholder_pool();
+        let result = build_helper_system_prompt(
+            &pool,
+            "/tmp/test",
+            "default",
+            "thread-exclude",
+            &SubagentProfile::Explore,
+        )
+        .await
+        .expect("build should succeed");
+
+        // Subagent prompts must NOT contain main-agent-only sections like
+        // FinalResponseStructure or BehavioralGuidelines.
+        assert!(
+            !result.text.contains("Final Response Structure"),
+            "subagent prompt must not contain FinalResponseStructure section"
+        );
+        assert!(
+            !result.text.contains("Behavioral Guidelines"),
+            "subagent prompt must not contain BehavioralGuidelines section"
+        );
+    }
 }

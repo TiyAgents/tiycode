@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use std::borrow::Cow;
 
 use super::super::build_context::BuildCx;
 use super::super::error_codes::codes;
@@ -62,9 +61,6 @@ impl SectionSource for RunModeSource {
             render_template_strict(&body, RUN_MODE_DECLARED_KEYS, &vars).map_err(|e| {
                 FatalError::new(codes::TEMPLATE_MISSING_KEY, format!("{}: {}", rel_path, e))
             })?;
-
-        // Cow wraps the const &'static str — clone if borrowed
-        let _ = Cow::Borrowed(rel_path);
 
         Ok(SectionOutcome::Produced(SectionBody {
             markdown: rendered,

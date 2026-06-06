@@ -7,6 +7,12 @@
 ///
 /// Ephemeral sections (ActiveGoal, ActivePlan) are excluded because their
 /// content depends on thread-specific DB state not available in fixtures.
+///
+/// **Cross-platform normalisation**: Environment-dependent values (OS, arch,
+/// shell, home directory, tmpdir) are replaced with stable placeholders
+/// (`[os]`, `[arch]`, `[shell]`, `[HOME]`, `[TMPDIR]`) before snapshot
+/// comparison so the same `.snap` files work on macOS, Linux, and any CI
+/// runner regardless of the user account name.
 #[cfg(test)]
 mod tests {
     use super::super::budget::PromptBudget;
@@ -62,15 +68,39 @@ mod tests {
 
         let budget = PromptBudget::for_model(&cx.target_model, &surface);
 
-        let composed = composer
+        let mut composed = composer
             .build(&surface, &cx, &budget)
             .await
             .expect("composer build");
+
+        // Normalise platform / user-account-dependent content so the
+        // same snapshots pass on every OS and CI runner.
+        composed.text = normalize_snapshot_text(&composed.text);
 
         let snapshot_text = format_audit_snapshot(&composed);
         insta::with_settings!({ snapshot_suffix => snapshot_name }, {
             insta::assert_snapshot!(snapshot_text);
         });
+    }
+
+    /// Replace host-dependent values with stable placeholders.
+    fn normalize_snapshot_text(text: &str) -> String {
+        let home = dirs::home_dir()
+            .and_then(|p| p.to_str().map(String::from))
+            .unwrap_or_else(|| "/home/runner".to_string());
+        let tmpdir = std::env::var("TMPDIR")
+            .unwrap_or_else(|_| "/tmp".to_string())
+            .trim_end_matches('/')
+            .to_string();
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+
+        text.replace(&home, "[HOME]")
+            .replace(&tmpdir, "[TMPDIR]")
+            .replace(os, "[os]")
+            .replace(arch, "[arch]")
+            .replace(&shell, "[shell]")
     }
 
     /// Format the ComposedPrompt into a human-readable snapshot string.
@@ -189,10 +219,13 @@ mod tests {
         };
 
         let budget = PromptBudget::for_model(&cx.target_model, &surface);
-        let composed = composer
+        let mut composed = composer
             .build(&surface, &cx, &budget)
             .await
             .expect("composer build");
+
+        // Normalise before snapshot comparison (same as snap_surface).
+        composed.text = normalize_snapshot_text(&composed.text);
 
         let snapshot_text = format_audit_snapshot(&composed);
         insta::with_settings!({ snapshot_suffix => "subagent_custom" }, {
