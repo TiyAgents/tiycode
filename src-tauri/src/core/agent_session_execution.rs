@@ -920,6 +920,21 @@ impl AgentSession {
                     format!("No helper profile resolved for tool '{}'", tool.tool_name())
                 })?;
 
+        // The main agent is depth 1, so its direct delegates run at depth 2.
+        // Reject targets whose configured max delegation depth cannot accommodate
+        // being delegated to at depth 2 (mirrors the recursive subagent path's
+        // enforcement in HelperDelegationContext::resolve_delegation_sync).
+        const MAIN_AGENT_CHILD_DEPTH: u32 = 2;
+        if let Some(profile) = resolved_profile.as_ref() {
+            let max_depth = profile.max_delegation_depth();
+            if MAIN_AGENT_CHILD_DEPTH > max_depth {
+                return Err(format!(
+                    "{} cannot be delegated at depth {MAIN_AGENT_CHILD_DEPTH} (its max delegation depth is {max_depth})",
+                    tool.tool_name()
+                ));
+            }
+        }
+
         Ok(ResolvedHelperDelegate {
             agent_name: tool.tool_name(),
             tool,
@@ -935,6 +950,12 @@ impl AgentSession {
         delegate: &ResolvedHelperDelegate,
         parent_tool_call_id: &str,
     ) -> Result<HelperRunResult, crate::model::errors::AppError> {
+        // Custom subagents accessible from the active profile, so a delegated
+        // helper that is allowed to delegate further can inject and resolve
+        // `agent_{slug}` delegation tools without re-reading the active profile.
+        let custom_delegation_targets =
+            crate::core::agent_session_tools::list_custom_delegation_targets_from_pool(&self.pool)
+                .await;
         self.helper_orchestrator
             .run_helper(HelperRunRequest {
                 run_id: self.spec.run_id.clone(),
@@ -950,6 +971,10 @@ impl AgentSession {
                 event_tx: self.event_tx.clone(),
                 session_abort_signal: self.abort_signal.clone(),
                 thinking_level: self.spec.model_plan.thinking_level,
+                // The main agent is depth 1; its direct delegates are depth 2.
+                delegation_depth: 2,
+                model_plan: self.spec.model_plan.clone(),
+                custom_delegation_targets,
             })
             .await
     }
@@ -1005,44 +1030,10 @@ impl AgentSession {
     /// Validates both that the subagent is enabled and that it is accessible from the
     /// active agent profile via the `profile_subagent_access` table.
     async fn resolve_custom_subagent_profile(&self, slug: &str) -> Option<SubagentProfile> {
-        use crate::persistence::repo::{custom_subagent_repo, settings_repo};
-
-        let record = custom_subagent_repo::get_by_slug(&self.pool, slug)
-            .await
-            .ok()
-            .flatten()?;
-
-        if !record.is_enabled {
-            return None;
-        }
-
-        // Verify the active profile grants access to this subagent.
-        // If no active profile is set, custom subagents are not available — consistent
-        // with build_session_spec which injects no custom tools when profile_id is empty.
-        let active_profile_id = settings_repo::get(&self.pool, "active_profile_id")
-            .await
-            .ok()
-            .flatten()
-            .and_then(|s| serde_json::from_str::<String>(&s.value_json).ok())
-            .unwrap_or_default();
-
-        if active_profile_id.is_empty() {
-            return None;
-        }
-
-        let allowed_ids = custom_subagent_repo::get_profile_access(&self.pool, &active_profile_id)
-            .await
-            .unwrap_or_default();
-        if !allowed_ids.contains(&record.id) {
-            return None;
-        }
-
-        Some(SubagentProfile::Custom {
-            slug: record.slug.clone(),
-            system_prompt: record.system_prompt.clone(),
-            allowed_tools: record.allowed_tools_vec(),
-            model_role: record.model_role,
-        })
+        crate::core::agent_session_tools::resolve_custom_subagent_profile_from_pool(
+            &self.pool, slug,
+        )
+        .await
     }
 
     async fn execute_plan_checkpoint(&self, tool_input: &serde_json::Value) -> AgentToolResult {
@@ -2096,9 +2087,13 @@ mod tests {
             review_request: None,
             helper_profile: Some(SubagentProfile::Custom {
                 slug: "custom".to_string(),
+                name: "Custom".to_string(),
+                invocation_description: "custom agent".to_string(),
                 system_prompt: "custom prompt".to_string(),
                 allowed_tools: allowed_tools.into_iter().map(str::to_string).collect(),
                 model_role: CustomSubagentModelRole::Auxiliary,
+                can_delegate: false,
+                max_delegation_depth: 3,
             }),
             model_role: test_model_role(),
         }

@@ -11,9 +11,13 @@ use tokio::sync::Mutex;
 
 use crate::core::agent_session::standard_tool_timeout;
 use crate::core::agent_session::{merge_payload, ResolvedModelRole};
+use crate::core::agent_session_types::ResolvedRuntimeModelPlan;
 use crate::core::executors::ToolOutput;
+use crate::core::subagent::parallel_contract::ParallelSubagentRequest;
 use crate::core::subagent::review_contract::{extract_review_report, render_parent_summary};
-use crate::core::subagent::runtime_orchestration::{RuntimeOrchestrationTool, SubagentProfile};
+use crate::core::subagent::runtime_orchestration::{
+    CustomDelegationTarget, RuntimeOrchestrationTool, SubagentProfile, GLOBAL_MAX_DELEGATION_DEPTH,
+};
 use crate::core::tool_gateway::{
     ToolExecutionOptions, ToolExecutionRequest, ToolGateway, ToolGatewayResult,
 };
@@ -44,12 +48,79 @@ pub struct HelperRunRequest {
     /// DeepSeek thinking-enabled payloads are normalised correctly in the
     /// subagent payload hook.
     pub thinking_level: ThinkingLevel,
+    /// 1-based delegation chain depth of this helper. The main agent is depth 1;
+    /// a helper it delegates to is depth 2, and so on. Used to enforce the
+    /// per-agent `max_delegation_depth` and the global safety bound when this
+    /// helper itself delegates further.
+    pub delegation_depth: u32,
+    /// Resolved runtime model plan, propagated so a delegating helper can resolve
+    /// the appropriate model role for the children it delegates to.
+    pub model_plan: ResolvedRuntimeModelPlan,
+    /// Custom subagents accessible from the active profile, propagated so a
+    /// delegating helper can inject `agent_{slug}` delegation tools and resolve
+    /// recursive custom delegations without re-reading the active profile.
+    pub custom_delegation_targets: Vec<CustomDelegationTarget>,
 }
 
 pub struct HelperRunResult {
     pub summary: String,
     pub raw_summary: Option<String>,
     pub snapshot: SubagentProgressSnapshot,
+}
+
+/// Context propagated into a delegating helper's tool executor so that it can
+/// recursively delegate to other subagents (one more level deep) when the
+/// helper's profile allows it. Cloned cheaply (mostly `Arc`s and small owned
+/// values) for each delegated tool call.
+#[derive(Clone)]
+struct HelperDelegationContext {
+    orchestrator: HelperAgentOrchestrator,
+    caller_profile: SubagentProfile,
+    caller_depth: u32,
+    run_id: String,
+    thread_id: String,
+    workspace_path: String,
+    run_mode: String,
+    model_plan: ResolvedRuntimeModelPlan,
+    custom_delegation_targets: Vec<CustomDelegationTarget>,
+    event_tx: tokio::sync::mpsc::UnboundedSender<ThreadStreamEvent>,
+    session_abort_signal: tiycore::agent::AbortSignal,
+    thinking_level: ThinkingLevel,
+}
+
+/// A resolved recursive delegation target produced from a delegating helper's
+/// `agent_*` tool call.
+struct ResolvedDelegation {
+    tool: RuntimeOrchestrationTool,
+    profile: SubagentProfile,
+    model_role: ResolvedModelRole,
+    task: String,
+}
+
+/// Extract the helper task (and optional structured review request) from a
+/// delegation tool's input. Mirrors `resolve_helper_tool_task` in the main
+/// session so recursive delegations build the same prompts.
+fn resolve_delegation_task(
+    tool: &RuntimeOrchestrationTool,
+    tool_input: &serde_json::Value,
+) -> Result<(String, Option<crate::core::subagent::ReviewRequest>), String> {
+    if *tool == RuntimeOrchestrationTool::Review {
+        let request = crate::core::subagent::ReviewRequest::from_tool_input(tool_input)?;
+        return Ok((request.to_helper_prompt(), Some(request)));
+    }
+
+    let task = tool_input
+        .get("task")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if task.is_empty() {
+        return Err("missing helper task".to_string());
+    }
+
+    Ok((task, None))
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -76,6 +147,7 @@ struct RunHelpersState {
     cancelled: bool,
 }
 
+#[derive(Clone)]
 pub struct HelperAgentOrchestrator {
     pool: SqlitePool,
     tool_gateway: Arc<ToolGateway>,
@@ -169,7 +241,17 @@ impl HelperAgentOrchestrator {
                 .await
                 .map(|s| s.is_ready())
                 .unwrap_or(false);
-        agent.set_tools(helper_profile.helper_tools(web_search_enabled));
+        // Base tool set for this helper profile, plus any delegation tools the
+        // helper is allowed to use. The children this helper would create occupy
+        // depth = this helper's depth + 1, which gates which delegation tools are
+        // injected (pre-filter; run_helper re-validates the bound at runtime).
+        let mut helper_tools = helper_profile.helper_tools(web_search_enabled);
+        let child_depth = request.delegation_depth.saturating_add(1);
+        helper_tools.extend(
+            helper_profile
+                .delegation_tools_for_helper(child_depth, &request.custom_delegation_targets),
+        );
+        agent.set_tools(helper_tools);
         agent.set_tool_execution(ToolExecutionMode::Sequential);
 
         // Propagate thinking level from the parent session so that the helper
@@ -223,6 +305,30 @@ impl HelperAgentOrchestrator {
         let progress_state_ref = Arc::clone(&progress_state);
         let progress_event_tx = request.event_tx.clone();
         let helper_session_abort_signal = request.session_abort_signal.clone();
+        // Delegation context: present only when this helper is allowed to
+        // delegate further and the children it would create stay within the
+        // global depth bound. Used by the tool executor to recursively delegate
+        // `agent_*` tool calls instead of forwarding them to the ToolGateway.
+        let delegation_ctx = if helper_profile.can_delegate()
+            && request.delegation_depth < GLOBAL_MAX_DELEGATION_DEPTH
+        {
+            Some(HelperDelegationContext {
+                orchestrator: self.clone(),
+                caller_profile: helper_profile.clone(),
+                caller_depth: request.delegation_depth,
+                run_id: request.run_id.clone(),
+                thread_id: request.thread_id.clone(),
+                workspace_path: request.workspace_path.clone(),
+                run_mode: request.run_mode.clone(),
+                model_plan: request.model_plan.clone(),
+                custom_delegation_targets: request.custom_delegation_targets.clone(),
+                event_tx: request.event_tx.clone(),
+                session_abort_signal: request.session_abort_signal.clone(),
+                thinking_level: request.thinking_level,
+            })
+        } else {
+            None
+        };
         agent.set_tool_executor(move |tool_name, tool_call_id, tool_input, _update_cb| {
             let tool_name = tool_name.to_string();
             let tool_input = tool_input.clone();
@@ -242,8 +348,30 @@ impl HelperAgentOrchestrator {
             let helper_id_for_storage = helper_id_for_events.clone();
             let helper_started_at_for_events = helper_started_at_for_events.clone();
             let helper_abort_signal = helper_session_abort_signal.clone();
+            let delegation_ctx = delegation_ctx.clone();
 
             async move {
+                // Recursive delegation: when this helper is allowed to delegate
+                // and the tool is an `agent_*` orchestration tool, run the child
+                // subagent via the orchestrator instead of the ToolGateway.
+                if let Some(ctx) = delegation_ctx.as_ref() {
+                    if let Some(tool) = RuntimeOrchestrationTool::parse(&tool_name) {
+                        return ctx
+                            .handle_delegation(
+                                tool,
+                                &tool_input,
+                                &persisted_tool_call_id,
+                                &progress_event_tx,
+                                &helper_run_id,
+                                &helper_id_for_events,
+                                &helper_kind,
+                                &helper_started_at_for_events,
+                                &progress_state_ref,
+                            )
+                            .await;
+                    }
+                }
+
                 let action = describe_subagent_action(&tool_name, &tool_input);
                 emit_subagent_progress(
                     &progress_event_tx,
@@ -547,6 +675,20 @@ impl HelperAgentOrchestrator {
         }
     }
 
+    /// Type-erased wrapper around `run_helper` used at recursive delegation
+    /// boundaries. Returning a boxed `dyn Future` gives the recursion point a
+    /// concrete, nameable type so the compiler can break the otherwise infinite
+    /// opaque-type / `Send` inference cycle introduced when a subagent's tool
+    /// executor awaits another `run_helper`.
+    pub fn run_helper_boxed(
+        self,
+        request: HelperRunRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<HelperRunResult, AppError>> + Send>,
+    > {
+        Box::pin(async move { self.run_helper(request).await })
+    }
+
     pub async fn cancel_run(&self, run_id: &str) {
         let helpers = {
             let mut active = self.active_helpers.lock().await;
@@ -573,6 +715,282 @@ impl HelperAgentOrchestrator {
                 active.remove(run_id);
             }
         }
+    }
+}
+
+impl HelperDelegationContext {
+    /// Resolve and run a recursive `agent_*` delegation from a delegating helper.
+    /// Builds a structured tool result mirroring the main session's delegation
+    /// result shape, and emits subagent progress events for the delegating step.
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_delegation(
+        &self,
+        tool: RuntimeOrchestrationTool,
+        tool_input: &serde_json::Value,
+        parent_tool_call_id: &str,
+        progress_event_tx: &tokio::sync::mpsc::UnboundedSender<ThreadStreamEvent>,
+        run_id: &str,
+        subtask_id: &str,
+        helper_kind: &str,
+        started_at: &str,
+        progress_state: &Arc<StdMutex<SubagentProgressState>>,
+    ) -> AgentToolResult {
+        let child_depth = self.caller_depth.saturating_add(1);
+        let tool_label = tool.tool_name();
+        let action_label = format!("delegating to {tool_label}");
+        emit_subagent_progress(
+            progress_event_tx,
+            run_id,
+            subtask_id,
+            helper_kind,
+            started_at,
+            SubagentActivityStatus::Started,
+            progress_state,
+            format!("Delegating to {tool_label}"),
+            |progress| progress.record_started(&tool_label, &action_label),
+        );
+
+        let outcome = match tool.clone() {
+            RuntimeOrchestrationTool::Parallel => {
+                self.handle_parallel_delegation(tool_input, parent_tool_call_id)
+                    .await
+            }
+            _ => {
+                self.handle_single_delegation(tool, tool_input, parent_tool_call_id, child_depth)
+                    .await
+            }
+        };
+
+        match outcome {
+            Ok(result) => {
+                emit_subagent_progress(
+                    progress_event_tx,
+                    run_id,
+                    subtask_id,
+                    helper_kind,
+                    started_at,
+                    SubagentActivityStatus::Succeeded,
+                    progress_state,
+                    format!("Finished delegating to {tool_label}"),
+                    |progress| progress.record_finished(None),
+                );
+                result
+            }
+            Err(error) => {
+                emit_subagent_progress(
+                    progress_event_tx,
+                    run_id,
+                    subtask_id,
+                    helper_kind,
+                    started_at,
+                    SubagentActivityStatus::Failed,
+                    progress_state,
+                    format!("Failed delegating to {tool_label} ({error})"),
+                    |progress| progress.record_finished(Some(error.clone())),
+                );
+                helper_agent_error_result(error)
+            }
+        }
+    }
+
+    /// Resolve a single (non-parallel) delegation target, enforcing depth and
+    /// capability bounds, then run the child helper one level deeper.
+    async fn handle_single_delegation(
+        &self,
+        tool: RuntimeOrchestrationTool,
+        tool_input: &serde_json::Value,
+        parent_tool_call_id: &str,
+        child_depth: u32,
+    ) -> Result<AgentToolResult, String> {
+        let delegation = self
+            .resolve_delegation(tool.clone(), tool_input, child_depth)
+            .await?;
+        let result = self
+            .run_child_delegation(delegation, parent_tool_call_id, child_depth)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let review_report = if tool == RuntimeOrchestrationTool::Review {
+            result
+                .raw_summary
+                .as_deref()
+                .and_then(extract_review_report)
+        } else {
+            None
+        };
+
+        let details = serde_json::json!({
+            "summary": result.summary.clone(),
+            "rawSummary": result.raw_summary.clone(),
+            "snapshot": result.snapshot,
+            "reviewReport": review_report,
+        });
+
+        Ok(AgentToolResult {
+            content: vec![ContentBlock::Text(TextContent::new(result.summary))],
+            details: Some(details),
+        })
+    }
+
+    /// Resolve an `agent_parallel` delegation issued by a delegating helper.
+    /// Each child task is delegated one level deeper and validated against the
+    /// same depth/capability bounds. Runs sequentially to bound resource usage
+    /// at deeper levels (concurrency is reserved for the top-level orchestrator).
+    async fn handle_parallel_delegation(
+        &self,
+        tool_input: &serde_json::Value,
+        parent_tool_call_id: &str,
+    ) -> Result<AgentToolResult, String> {
+        let request = ParallelSubagentRequest::from_tool_input(tool_input)?;
+        let child_depth = self.caller_depth.saturating_add(1);
+        let mut summaries = Vec::new();
+
+        for (index, task) in request.tasks.iter().enumerate() {
+            let agent_name = task.agent.trim().to_string();
+            let Some(tool) = RuntimeOrchestrationTool::parse(&agent_name) else {
+                summaries.push(format!("[{index}] {agent_name}: unknown subagent tool"));
+                continue;
+            };
+            if tool == RuntimeOrchestrationTool::Parallel {
+                summaries.push(format!(
+                    "[{index}] {agent_name}: agent_parallel cannot delegate to itself"
+                ));
+                continue;
+            }
+
+            match self
+                .resolve_delegation(tool, &task.to_tool_input(), child_depth)
+                .await
+            {
+                Ok(delegation) => match self
+                    .run_child_delegation(delegation, parent_tool_call_id, child_depth)
+                    .await
+                {
+                    Ok(result) => {
+                        summaries.push(format!("[{index}] {agent_name}:\n{}", result.summary))
+                    }
+                    Err(error) => summaries.push(format!("[{index}] {agent_name}: {error}")),
+                },
+                Err(error) => summaries.push(format!("[{index}] {agent_name}: {error}")),
+            }
+        }
+
+        let summary = summaries.join("\n\n");
+        Ok(AgentToolResult {
+            content: vec![ContentBlock::Text(TextContent::new(summary.clone()))],
+            details: Some(serde_json::json!({ "summary": summary })),
+        })
+    }
+
+    /// Resolve a delegation tool into a concrete child profile + model role,
+    /// enforcing the caller's capability and the target's max delegation depth
+    /// plus the global safety bound.
+    fn resolve_delegation_sync(
+        &self,
+        tool: RuntimeOrchestrationTool,
+        profile: SubagentProfile,
+        tool_input: &serde_json::Value,
+        child_depth: u32,
+    ) -> Result<ResolvedDelegation, String> {
+        if !self.caller_profile.can_delegate() {
+            return Err(format!(
+                "{} is not allowed to delegate to other subagents",
+                self.caller_profile.helper_kind()
+            ));
+        }
+        if child_depth > GLOBAL_MAX_DELEGATION_DEPTH {
+            return Err(format!(
+                "delegation depth {child_depth} exceeds the global maximum {GLOBAL_MAX_DELEGATION_DEPTH}"
+            ));
+        }
+        if child_depth > profile.max_delegation_depth() {
+            return Err(format!(
+                "{} cannot be delegated at depth {child_depth} (its max delegation depth is {})",
+                tool.tool_name(),
+                profile.max_delegation_depth()
+            ));
+        }
+
+        let (task, _review_request) = resolve_delegation_task(&tool, tool_input)?;
+        let model_role = crate::core::agent_session_tools::resolve_helper_model_role(
+            &self.model_plan,
+            &tool,
+            Some(&profile),
+        )
+        .ok_or_else(|| format!("No helper profile resolved for tool '{}'", tool.tool_name()))?;
+
+        Ok(ResolvedDelegation {
+            tool,
+            profile,
+            model_role,
+            task,
+        })
+    }
+
+    /// Async resolution wrapper: loads built-in or custom profile, then applies
+    /// the synchronous capability/depth checks.
+    async fn resolve_delegation(
+        &self,
+        tool: RuntimeOrchestrationTool,
+        tool_input: &serde_json::Value,
+        child_depth: u32,
+    ) -> Result<ResolvedDelegation, String> {
+        let profile = match &tool {
+            RuntimeOrchestrationTool::Explore => SubagentProfile::Explore,
+            RuntimeOrchestrationTool::Review => SubagentProfile::Review,
+            RuntimeOrchestrationTool::Parallel => {
+                return Err("agent_parallel cannot be used as an individual helper".to_string());
+            }
+            RuntimeOrchestrationTool::Custom(slug) => {
+                crate::core::agent_session_tools::resolve_custom_subagent_profile_from_pool(
+                    &self.orchestrator.pool,
+                    slug,
+                )
+                .await
+                .ok_or_else(|| format!("Custom subagent 'agent_{slug}' not found or not enabled"))?
+            }
+        };
+
+        self.resolve_delegation_sync(tool, profile, tool_input, child_depth)
+    }
+
+    /// Run the resolved child delegation via the orchestrator at the next depth,
+    /// reusing the same run/abort signal so cancellation cascades correctly.
+    ///
+    /// The recursive `run_helper` call is routed through `run_helper_boxed`,
+    /// which returns a type-erased `Pin<Box<dyn Future + Send>>`. This is
+    /// required to break the otherwise infinite opaque-type recursion in the
+    /// tool-executor future: the executor future awaits the child's `run_helper`,
+    /// which installs another tool-executor future, and so on. Boxing names the
+    /// recursion point with a concrete type so the compiler can terminate type
+    /// inference, while cancellation still works through the shared `run_id` /
+    /// `active_helpers` registration and abort signal.
+    async fn run_child_delegation(
+        &self,
+        delegation: ResolvedDelegation,
+        parent_tool_call_id: &str,
+        child_depth: u32,
+    ) -> Result<HelperRunResult, AppError> {
+        let request = HelperRunRequest {
+            run_id: self.run_id.clone(),
+            thread_id: self.thread_id.clone(),
+            tool: delegation.tool,
+            helper_profile: Some(delegation.profile),
+            parent_tool_call_id: Some(parent_tool_call_id.to_string()),
+            task: delegation.task,
+            model_role: delegation.model_role,
+            system_prompt: String::new(),
+            workspace_path: self.workspace_path.clone(),
+            run_mode: self.run_mode.clone(),
+            event_tx: self.event_tx.clone(),
+            session_abort_signal: self.session_abort_signal.clone(),
+            thinking_level: self.thinking_level,
+            delegation_depth: child_depth,
+            model_plan: self.model_plan.clone(),
+            custom_delegation_targets: self.custom_delegation_targets.clone(),
+        };
+
+        self.orchestrator.clone().run_helper_boxed(request).await
     }
 }
 
@@ -1167,9 +1585,13 @@ mod tests {
         let pool = placeholder_pool();
         let profile = SubagentProfile::Custom {
             slug: "tester".to_string(),
+            name: "Tester".to_string(),
+            invocation_description: "test helper".to_string(),
             system_prompt: "You are a test helper.".to_string(),
             allowed_tools: vec!["read".to_string(), "search".to_string()],
             model_role: crate::model::subagent::CustomSubagentModelRole::Auxiliary,
+            can_delegate: false,
+            max_delegation_depth: 3,
         };
         let result =
             build_helper_system_prompt(&pool, "/tmp/test", "default", "thread-custom", &profile)
@@ -1189,9 +1611,13 @@ mod tests {
         let pool = placeholder_pool();
         let profile_custom = SubagentProfile::Custom {
             slug: "tester".to_string(),
+            name: "Tester".to_string(),
+            invocation_description: "test helper".to_string(),
             system_prompt: "You are a test helper.".to_string(),
             allowed_tools: vec!["read".to_string(), "search".to_string()],
             model_role: crate::model::subagent::CustomSubagentModelRole::Auxiliary,
+            can_delegate: false,
+            max_delegation_depth: 3,
         };
 
         let explore = build_helper_system_prompt(

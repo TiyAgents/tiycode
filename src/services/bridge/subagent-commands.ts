@@ -17,6 +17,8 @@ export type CustomSubagentInput = {
   allowedTools: string[];
   modelRole?: CustomSubagentModelRole;
   isEnabled?: boolean;
+  canDelegate?: boolean;
+  maxDelegationDepth?: number;
 };
 
 export async function customSubagentList(): Promise<CustomSubagent[]> {

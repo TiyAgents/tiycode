@@ -177,6 +177,8 @@ export type CustomSubagent = {
   allowedTools: string[];
   modelRole: CustomSubagentModelRole;
   isEnabled: boolean;
+  canDelegate: boolean;
+  maxDelegationDepth: number;
   createdAt: string;
   updatedAt: string;
 };

@@ -3,8 +3,18 @@ use crate::core::subagent::parallel_contract::{
     PARALLEL_SUBAGENT_DEFAULT_CONCURRENCY, PARALLEL_SUBAGENT_MAX_CONCURRENCY,
     PARALLEL_SUBAGENT_MAX_TASKS,
 };
-use crate::model::subagent::CustomSubagentModelRole;
+use crate::model::subagent::{CustomSubagentModelRole, CustomSubagentRecord};
 use tiycore::agent::AgentTool;
+
+/// Hard upper bound on the delegation chain depth (1-based). The main agent is
+/// depth 1; each delegated subagent increments the depth by one. No subagent may
+/// be created beyond this depth regardless of per-agent configuration, guarding
+/// against unbounded recursion.
+pub const GLOBAL_MAX_DELEGATION_DEPTH: u32 = 5;
+
+/// Built-in default for the maximum delegation depth a built-in subagent
+/// (explore / review) may be delegated to.
+pub const BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH: u32 = 3;
 
 pub const TERM_STATUS_TOOL_DESCRIPTION: &str =
     "Inspect the status of the desktop app's embedded Terminal panel session for the current thread. Use this to check that panel's session state without mutating it. It does not inspect the agent runtime, CLI process, or host shell outside the panel.";
@@ -33,10 +43,54 @@ pub enum SubagentProfile {
     Review,
     Custom {
         slug: String,
+        name: String,
+        invocation_description: String,
         system_prompt: String,
         allowed_tools: Vec<String>,
         model_role: CustomSubagentModelRole,
+        can_delegate: bool,
+        max_delegation_depth: u32,
     },
+}
+
+/// A custom subagent that the active profile grants access to, used to inject
+/// `agent_{slug}` delegation tools into a delegating subagent's tool set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomDelegationTarget {
+    pub slug: String,
+    pub name: String,
+    pub invocation_description: String,
+    pub max_delegation_depth: u32,
+}
+
+impl CustomDelegationTarget {
+    pub fn from_record(record: &CustomSubagentRecord) -> Self {
+        Self {
+            slug: record.slug.clone(),
+            name: record.name.clone(),
+            invocation_description: record.invocation_description.clone(),
+            max_delegation_depth: record.max_delegation_depth,
+        }
+    }
+
+    fn as_agent_tool(&self) -> AgentTool {
+        let tool_name = format!("agent_{}", self.slug);
+        AgentTool::new(
+            &tool_name,
+            &self.name,
+            &self.invocation_description,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What task to delegate to this subagent. Be specific about goals, relevant files, and expected output format."
+                    }
+                },
+                "required": ["task"]
+            }),
+        )
+    }
 }
 
 pub fn runtime_orchestration_tools() -> Vec<AgentTool> {
@@ -301,6 +355,75 @@ impl SubagentProfile {
             Self::Review => "helper_review".to_string(),
             Self::Custom { slug, .. } => format!("helper_custom_{slug}"),
         }
+    }
+
+    /// Whether this agent is allowed to delegate to other subagents.
+    /// Built-in explore cannot delegate; built-in review can; custom agents
+    /// follow their configured `can_delegate` flag.
+    pub fn can_delegate(&self) -> bool {
+        match self {
+            Self::Explore => false,
+            Self::Review => true,
+            Self::Custom { can_delegate, .. } => *can_delegate,
+        }
+    }
+
+    /// The maximum delegation chain depth (1-based) this agent may be delegated
+    /// to. Built-in subagents default to `BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH`;
+    /// custom agents follow their configured value.
+    pub fn max_delegation_depth(&self) -> u32 {
+        match self {
+            Self::Explore | Self::Review => BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH,
+            Self::Custom {
+                max_delegation_depth,
+                ..
+            } => *max_delegation_depth,
+        }
+    }
+
+    /// Build the set of `agent_*` delegation tools to inject into this helper's
+    /// tool set. Returns an empty vec when the helper is not allowed to delegate
+    /// (`can_delegate() == false`) or when `child_depth` already exceeds the
+    /// global safety bound. `child_depth` is the 1-based depth that any child
+    /// the helper creates would occupy (i.e. this helper's depth + 1).
+    ///
+    /// Built-in explore/review and each accessible custom target are pre-filtered
+    /// so that a tool is only injected when `child_depth <= target_max_depth`.
+    /// Runtime re-validates the same bound as a backstop.
+    pub fn delegation_tools_for_helper(
+        &self,
+        child_depth: u32,
+        custom_targets: &[CustomDelegationTarget],
+    ) -> Vec<AgentTool> {
+        if !self.can_delegate() || child_depth > GLOBAL_MAX_DELEGATION_DEPTH {
+            return Vec::new();
+        }
+
+        let mut tools = Vec::new();
+        let mut delegatable = false;
+
+        // Built-in explore / review (both default depth = BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH).
+        if child_depth <= BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH {
+            tools.push(RuntimeOrchestrationTool::Explore.as_agent_tool());
+            tools.push(RuntimeOrchestrationTool::Review.as_agent_tool());
+            delegatable = true;
+        }
+
+        // Custom subagents accessible from the active profile.
+        for target in custom_targets {
+            if child_depth <= target.max_delegation_depth {
+                tools.push(target.as_agent_tool());
+                delegatable = true;
+            }
+        }
+
+        // agent_parallel is a tool, not an agent: only inject it when at least
+        // one delegatable target exists for the children it would schedule.
+        if delegatable {
+            tools.push(RuntimeOrchestrationTool::Parallel.as_agent_tool());
+        }
+
+        tools
     }
 
     /// Subagent body is now rendered by SubagentBodySource via the Composer.
@@ -701,7 +824,10 @@ impl SubagentProfile {
 
 #[cfg(test)]
 mod tests {
-    use super::{runtime_orchestration_tools, RuntimeOrchestrationTool, SubagentProfile};
+    use super::{
+        runtime_orchestration_tools, CustomDelegationTarget, RuntimeOrchestrationTool,
+        SubagentProfile, GLOBAL_MAX_DELEGATION_DEPTH,
+    };
     use crate::model::subagent::CustomSubagentModelRole;
 
     #[test]
@@ -862,9 +988,13 @@ mod tests {
     fn custom_profile_resolves_tools_from_allowlist() {
         let profile = SubagentProfile::Custom {
             slug: "test".to_string(),
+            name: "Test".to_string(),
+            invocation_description: "desc".to_string(),
             system_prompt: "You are a test helper.".to_string(),
             allowed_tools: vec!["read".to_string(), "search".to_string()],
             model_role: CustomSubagentModelRole::Auxiliary,
+            can_delegate: false,
+            max_delegation_depth: 3,
         };
         let tools = profile.helper_tools(false);
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -879,13 +1009,78 @@ mod tests {
     fn custom_profile_can_allow_web_search_tool() {
         let profile = SubagentProfile::Custom {
             slug: "test".to_string(),
+            name: "Test".to_string(),
+            invocation_description: "desc".to_string(),
             system_prompt: "You are a test helper.".to_string(),
             allowed_tools: vec!["web_search".to_string()],
             model_role: CustomSubagentModelRole::Auxiliary,
+            can_delegate: false,
+            max_delegation_depth: 3,
         };
         let tools = profile.helper_tools(false);
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"web_search"));
         assert!(!tool_names.contains(&"read"));
+    }
+
+    #[test]
+    fn explore_profile_cannot_delegate() {
+        assert!(!SubagentProfile::Explore.can_delegate());
+        let tools = SubagentProfile::Explore.delegation_tools_for_helper(2, &[]);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn review_profile_injects_builtin_delegation_tools_within_depth() {
+        assert!(SubagentProfile::Review.can_delegate());
+        let tools = SubagentProfile::Review.delegation_tools_for_helper(2, &[]);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"agent_explore"));
+        assert!(names.contains(&"agent_review"));
+        assert!(names.contains(&"agent_parallel"));
+    }
+
+    #[test]
+    fn review_profile_omits_delegation_tools_beyond_builtin_depth() {
+        // child_depth 4 exceeds BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH (3).
+        let tools = SubagentProfile::Review.delegation_tools_for_helper(4, &[]);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn delegation_tools_include_accessible_custom_targets_within_depth() {
+        let targets = vec![
+            CustomDelegationTarget {
+                slug: "deep".to_string(),
+                name: "Deep".to_string(),
+                invocation_description: "deep agent".to_string(),
+                max_delegation_depth: 5,
+            },
+            CustomDelegationTarget {
+                slug: "shallow".to_string(),
+                name: "Shallow".to_string(),
+                invocation_description: "shallow agent".to_string(),
+                max_delegation_depth: 1,
+            },
+        ];
+        let tools = SubagentProfile::Review.delegation_tools_for_helper(2, &targets);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"agent_deep"));
+        // shallow.max_delegation_depth (1) < child_depth (2), so excluded.
+        assert!(!names.contains(&"agent_shallow"));
+    }
+
+    #[test]
+    fn delegation_tools_respect_global_max_depth() {
+        let targets = vec![CustomDelegationTarget {
+            slug: "deep".to_string(),
+            name: "Deep".to_string(),
+            invocation_description: "deep agent".to_string(),
+            max_delegation_depth: 5,
+        }];
+        // child_depth exceeding GLOBAL_MAX_DELEGATION_DEPTH yields no tools.
+        let tools = SubagentProfile::Review
+            .delegation_tools_for_helper(GLOBAL_MAX_DELEGATION_DEPTH + 1, &targets);
+        assert!(tools.is_empty());
     }
 }

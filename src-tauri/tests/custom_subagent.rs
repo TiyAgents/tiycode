@@ -38,6 +38,8 @@ async fn custom_subagent_crud_lifecycle() {
         allowed_tools: vec!["read".to_string(), "edit".to_string(), "search".to_string()],
         model_role: CustomSubagentModelRole::Primary,
         is_enabled: Some(true),
+        can_delegate: None,
+        max_delegation_depth: None,
     };
     let created = custom_subagent_repo::create(&pool, &input)
         .await
@@ -78,6 +80,8 @@ async fn custom_subagent_crud_lifecycle() {
         allowed_tools: vec!["read".to_string(), "edit".to_string(), "write".to_string()],
         model_role: CustomSubagentModelRole::Lightweight,
         is_enabled: Some(false),
+        can_delegate: None,
+        max_delegation_depth: None,
     };
     let updated = custom_subagent_repo::update(&pool, &created.id, &update_input)
         .await
@@ -113,6 +117,8 @@ async fn slug_uniqueness_constraint() {
         allowed_tools: vec![],
         model_role: CustomSubagentModelRole::Auxiliary,
         is_enabled: Some(true),
+        can_delegate: None,
+        max_delegation_depth: None,
     };
     custom_subagent_repo::create(&pool, &input)
         .await
@@ -165,6 +171,8 @@ async fn profile_subagent_access_set_and_get() {
         allowed_tools: vec!["read".to_string()],
         model_role: CustomSubagentModelRole::Auxiliary,
         is_enabled: Some(true),
+        can_delegate: None,
+        max_delegation_depth: None,
     };
     let input_b = CustomSubagentInput {
         name: "Agent B".to_string(),
@@ -174,6 +182,8 @@ async fn profile_subagent_access_set_and_get() {
         allowed_tools: vec!["read".to_string()],
         model_role: CustomSubagentModelRole::Auxiliary,
         is_enabled: Some(true),
+        can_delegate: None,
+        max_delegation_depth: None,
     };
     let a = custom_subagent_repo::create(&pool, &input_a).await.unwrap();
     let b = custom_subagent_repo::create(&pool, &input_b).await.unwrap();
@@ -252,6 +262,8 @@ async fn cascade_delete_subagent_removes_access() {
         allowed_tools: vec![],
         model_role: CustomSubagentModelRole::Auxiliary,
         is_enabled: Some(true),
+        can_delegate: None,
+        max_delegation_depth: None,
     };
     let agent = custom_subagent_repo::create(&pool, &input).await.unwrap();
     custom_subagent_repo::set_profile_access(&pool, "cascade-profile", &[agent.id.clone()])
@@ -284,4 +296,73 @@ async fn slug_validation_rejects_reserved_and_invalid() {
     assert!(validate_slug("refactor").is_ok());
     assert!(validate_slug("code-review").is_ok());
     assert!(validate_slug("a123").is_ok());
+}
+
+#[tokio::test]
+async fn custom_subagent_delegation_fields_persist_and_clamp() {
+    use tiycode_lib::persistence::repo::custom_subagent_repo;
+
+    let pool = setup_test_pool().await;
+
+    // Default (None) → can_delegate=false, max_delegation_depth=3.
+    let default_input = CustomSubagentInput {
+        name: "Default Agent".to_string(),
+        slug: "default-agent".to_string(),
+        system_prompt: "prompt".to_string(),
+        invocation_description: "desc".to_string(),
+        allowed_tools: vec!["read".to_string()],
+        model_role: CustomSubagentModelRole::Auxiliary,
+        is_enabled: Some(true),
+        can_delegate: None,
+        max_delegation_depth: None,
+    };
+    let created = custom_subagent_repo::create(&pool, &default_input)
+        .await
+        .expect("create should succeed");
+    assert!(!created.can_delegate);
+    assert_eq!(created.max_delegation_depth, 3);
+
+    // Explicit can_delegate=true and an out-of-range depth that must clamp to 5.
+    let delegating_input = CustomSubagentInput {
+        name: "Delegating Agent".to_string(),
+        slug: "delegating-agent".to_string(),
+        system_prompt: "prompt".to_string(),
+        invocation_description: "desc".to_string(),
+        allowed_tools: vec!["read".to_string()],
+        model_role: CustomSubagentModelRole::Auxiliary,
+        is_enabled: Some(true),
+        can_delegate: Some(true),
+        max_delegation_depth: Some(99),
+    };
+    let delegating = custom_subagent_repo::create(&pool, &delegating_input)
+        .await
+        .expect("create should succeed");
+    assert!(delegating.can_delegate);
+    assert_eq!(delegating.max_delegation_depth, 5, "depth must clamp to 5");
+
+    // Reload from DB to confirm persistence.
+    let reloaded = custom_subagent_repo::get_by_slug(&pool, "delegating-agent")
+        .await
+        .expect("get_by_slug should succeed")
+        .expect("should find record");
+    assert!(reloaded.can_delegate);
+    assert_eq!(reloaded.max_delegation_depth, 5);
+
+    // Update can lower the depth and toggle can_delegate off; a too-low value clamps to 1.
+    let update_input = CustomSubagentInput {
+        name: "Delegating Agent".to_string(),
+        slug: "delegating-agent".to_string(),
+        system_prompt: "prompt".to_string(),
+        invocation_description: "desc".to_string(),
+        allowed_tools: vec!["read".to_string()],
+        model_role: CustomSubagentModelRole::Auxiliary,
+        is_enabled: Some(true),
+        can_delegate: Some(false),
+        max_delegation_depth: Some(0),
+    };
+    let updated = custom_subagent_repo::update(&pool, &delegating.id, &update_input)
+        .await
+        .expect("update should succeed");
+    assert!(!updated.can_delegate);
+    assert_eq!(updated.max_delegation_depth, 1, "depth must clamp to 1");
 }

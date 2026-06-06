@@ -50,6 +50,8 @@ pub struct CustomSubagentRecord {
     pub allowed_tools: String, // JSON array string, e.g. '["read","list","search"]'
     pub model_role: CustomSubagentModelRole,
     pub is_enabled: bool,
+    pub can_delegate: bool,
+    pub max_delegation_depth: u32,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -76,6 +78,8 @@ pub struct CustomSubagentDto {
     pub allowed_tools: Vec<String>,
     pub model_role: CustomSubagentModelRole,
     pub is_enabled: bool,
+    pub can_delegate: bool,
+    pub max_delegation_depth: u32,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -92,6 +96,8 @@ impl From<CustomSubagentRecord> for CustomSubagentDto {
             allowed_tools: tools,
             model_role: r.model_role,
             is_enabled: r.is_enabled,
+            can_delegate: r.can_delegate,
+            max_delegation_depth: r.max_delegation_depth,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -113,6 +119,8 @@ pub struct CustomSubagentInput {
     #[serde(default)]
     pub model_role: CustomSubagentModelRole,
     pub is_enabled: Option<bool>,
+    pub can_delegate: Option<bool>,
+    pub max_delegation_depth: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,8 @@ struct SubagentRow {
     allowed_tools: String,
     model_role: String,
     is_enabled: i32,
+    can_delegate: i32,
+    max_delegation_depth: i32,
     created_at: String,
     updated_at: String,
 }
@@ -34,13 +36,15 @@ impl SubagentRow {
             allowed_tools: self.allowed_tools,
             model_role: CustomSubagentModelRole::from_db(&self.model_role),
             is_enabled: self.is_enabled != 0,
+            can_delegate: self.can_delegate != 0,
+            max_delegation_depth: self.max_delegation_depth as u32,
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
     }
 }
 
-const SUBAGENT_COLUMNS: &str = "id, name, slug, system_prompt, invocation_description, allowed_tools, model_role, is_enabled, created_at, updated_at";
+const SUBAGENT_COLUMNS: &str = "id, name, slug, system_prompt, invocation_description, allowed_tools, model_role, is_enabled, can_delegate, max_delegation_depth, created_at, updated_at";
 
 // ---------------------------------------------------------------------------
 // CRUD operations
@@ -102,11 +106,18 @@ pub async fn create(
     } else {
         0
     };
+    let can_delegate: i32 = if input.can_delegate.unwrap_or(false) {
+        1
+    } else {
+        0
+    };
+    let max_depth = input.max_delegation_depth.unwrap_or(3);
+    let max_depth_val: i32 = max_depth.clamp(1, 5) as i32;
     let tools_json =
         serde_json::to_string(&input.allowed_tools).unwrap_or_else(|_| "[]".to_string());
 
     sqlx::query(
-        "INSERT INTO custom_subagents (id, name, slug, system_prompt, invocation_description, allowed_tools, model_role, is_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO custom_subagents (id, name, slug, system_prompt, invocation_description, allowed_tools, model_role, is_enabled, can_delegate, max_delegation_depth, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&input.name)
@@ -116,6 +127,8 @@ pub async fn create(
     .bind(&tools_json)
     .bind(input.model_role.as_str())
     .bind(is_enabled)
+    .bind(can_delegate)
+    .bind(max_depth_val)
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -141,6 +154,8 @@ pub async fn create(
         allowed_tools: tools_json,
         model_role: input.model_role,
         is_enabled: is_enabled != 0,
+        can_delegate: can_delegate != 0,
+        max_delegation_depth: max_depth_val as u32,
         created_at: now.clone(),
         updated_at: now,
     })
@@ -168,11 +183,17 @@ pub async fn update(
 
     let is_enabled_val = input.is_enabled.unwrap_or_else(|| existing.is_enabled);
     let is_enabled: i32 = if is_enabled_val { 1 } else { 0 };
+    let can_delegate_val = input.can_delegate.unwrap_or_else(|| existing.can_delegate);
+    let can_delegate: i32 = if can_delegate_val { 1 } else { 0 };
+    let max_depth_val = input
+        .max_delegation_depth
+        .unwrap_or_else(|| existing.max_delegation_depth);
+    let max_depth_val: i32 = max_depth_val.clamp(1, 5) as i32;
     let tools_json =
         serde_json::to_string(&input.allowed_tools).unwrap_or_else(|_| "[]".to_string());
 
     sqlx::query(
-        "UPDATE custom_subagents SET name = ?, slug = ?, system_prompt = ?, invocation_description = ?, allowed_tools = ?, model_role = ?, is_enabled = ?, updated_at = ? WHERE id = ?",
+        "UPDATE custom_subagents SET name = ?, slug = ?, system_prompt = ?, invocation_description = ?, allowed_tools = ?, model_role = ?, is_enabled = ?, can_delegate = ?, max_delegation_depth = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&input.name)
     .bind(&input.slug)
@@ -181,6 +202,8 @@ pub async fn update(
     .bind(&tools_json)
     .bind(input.model_role.as_str())
     .bind(is_enabled)
+    .bind(can_delegate)
+    .bind(max_depth_val)
     .bind(&now)
     .bind(id)
     .execute(pool)
@@ -207,6 +230,8 @@ pub async fn update(
         allowed_tools: tools_json,
         model_role: input.model_role,
         is_enabled: is_enabled_val,
+        can_delegate: can_delegate_val,
+        max_delegation_depth: max_depth_val as u32,
         created_at: existing.created_at.clone(),
         updated_at: now,
     })
@@ -281,7 +306,7 @@ pub async fn list_for_profile(
     profile_id: &str,
 ) -> Result<Vec<CustomSubagentRecord>, AppError> {
     let rows = sqlx::query_as::<_, SubagentRow>(&format!(
-        "SELECT s.id, s.name, s.slug, s.system_prompt, s.invocation_description, s.allowed_tools, s.model_role, s.is_enabled, s.created_at, s.updated_at \
+        "SELECT s.id, s.name, s.slug, s.system_prompt, s.invocation_description, s.allowed_tools, s.model_role, s.is_enabled, s.can_delegate, s.max_delegation_depth, s.created_at, s.updated_at \
          FROM custom_subagents s \
          INNER JOIN profile_subagent_access a ON s.id = a.subagent_id \
          WHERE a.profile_id = ? AND s.is_enabled = 1 \
