@@ -33,7 +33,7 @@ pub enum SectionId {
     /// Subagent body (identity + persona instructions), replaces
     /// the per-variant hardcoded strings in SubagentProfile::system_prompt().
     /// For built-in Explore/Review loads templates; for Custom returns user prompt.
-    SubagentBody,
+    CustomSubagentBody,
     /// Compaction instructions for summary generation
     CompactionContract,
     /// Title generation instructions

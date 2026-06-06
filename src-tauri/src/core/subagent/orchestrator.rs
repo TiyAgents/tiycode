@@ -155,16 +155,15 @@ impl HelperAgentOrchestrator {
             crate::core::agent_runtime_limits::desktop_agent_max_turns(&self.pool).await;
         agent.set_max_turns(max_turns);
         agent.set_max_retries(Some(TIYCORE_REQUEST_MAX_RETRIES));
-        agent.set_system_prompt(
-            build_helper_system_prompt(
-                &self.pool,
-                &request.workspace_path,
-                &request.run_mode,
-                &request.thread_id,
-                &helper_profile,
-            )
-            .await?,
-        );
+        let composed = build_helper_system_prompt(
+            &self.pool,
+            &request.workspace_path,
+            &request.run_mode,
+            &request.thread_id,
+            &helper_profile,
+        )
+        .await?;
+        agent.set_system_prompt(composed.text);
         let web_search_enabled =
             crate::core::web_search_settings::load_web_search_settings(&self.pool)
                 .await
@@ -855,10 +854,11 @@ async fn build_helper_system_prompt(
     run_mode: &str,
     thread_id: &str,
     helper_profile: &SubagentProfile,
-) -> Result<String, AppError> {
+) -> Result<crate::core::prompt::ComposedPrompt, AppError> {
     use crate::core::prompt::{
-        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptBudget,
-        PromptSurface, RunMode, SourceExecPolicy, SystemClock,
+        BuildCx, Composer, DefaultCacheMarkerArbiter, MarkdownRenderer,
+        ModelTarget, NoopRedactor, PromptBudget, PromptSurface, RunMode, SourceExecPolicy,
+        SystemClock,
     };
     use std::sync::Arc;
 
@@ -878,11 +878,13 @@ async fn build_helper_system_prompt(
     };
 
     let registry = Arc::new(crate::core::prompt::registry::default_registry());
+    let arbiter = Arc::new(DefaultCacheMarkerArbiter::new(4));
     let composer = Composer::new(
         registry,
         SourceExecPolicy::default(),
         Arc::new(NoopRedactor),
-    );
+    )
+    .with_cache_arbiter(arbiter);
 
     let cx = BuildCx {
         pool,
@@ -906,14 +908,14 @@ async fn build_helper_system_prompt(
         renderer: Arc::new(MarkdownRenderer),
     };
 
-    let budget = PromptBudget::for_model(200_000, &surface);
+    let budget = PromptBudget::for_model(&cx.target_model, &surface);
     let composed = composer.build(&surface, &cx, &budget).await?;
 
     // Phase 7: Subagent body (identity + persona + shell tooling guide)
     // is now rendered entirely by SubagentBodySource via the Composer.
     // Legacy helper_shell_tooling_guide() and SubagentProfile::system_prompt()
     // calls are removed.
-    Ok(composed.text)
+    Ok(composed)
 }
 
 fn take_escalation_summary(summary: &Arc<StdMutex<Option<String>>>) -> Option<String> {

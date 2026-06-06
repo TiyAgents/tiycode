@@ -4,13 +4,13 @@ use super::layer::{LayerResolver, PromptLayer, SectionAnchor, SectionOrder};
 use super::section_id::SectionId;
 use super::section_source::{SectionCriticality, SectionSpec};
 use super::sources::{
-    ActiveGoalSource, ActivePlanSource, CompactionContractSource, ProfileInstructionsSource,
-    ProjectContextSource, RunModeSource, SandboxPermissionsSource, SkillsSource,
+    ActiveGoalSource, ActivePlanSource, BehavioralGuidelinesSource, CompactionContractSource,
+    FinalResponseStructureSource, ProfileInstructionsSource, ProjectContextSource, RoleSource,
+    RunModeSource, SandboxPermissionsSource, ShellToolingGuideSource, SkillsSource,
     SubagentBodySource, SubagentOutputContractSource, SystemEnvironmentSource, TitleContractSource,
     WorkspaceLocationSource,
 };
 use super::surface::{PromptSurface, SurfaceMatcher, SurfacePattern};
-use super::templates::{TemplateSource, TemplateVars};
 
 /// PerSurface layer resolver for ProfileInstructions:
 /// MainAgent / Subagent → SessionStable
@@ -84,13 +84,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(TemplateSource::new(
-            "role.md",
-            include_str!("templates/role.md"),
-            &[],
-            |_cx| Ok(TemplateVars::new()),
-            1,
-        )),
+        source: Box::new(RoleSource::new(1)),
     });
 
     registry.register(SectionSpec {
@@ -105,13 +99,7 @@ pub fn default_registry() -> SectionRegistry {
         // bounding worst-case growth.
         max_chars: Some(20_000),
         criticality: SectionCriticality::Critical,
-        source: Box::new(TemplateSource::new(
-            "behavioral_guidelines.md",
-            include_str!("templates/behavioral_guidelines.md"),
-            &[],
-            |_cx| Ok(TemplateVars::new()),
-            1,
-        )),
+        source: Box::new(BehavioralGuidelinesSource::new(1)),
     });
 
     registry.register(SectionSpec {
@@ -123,13 +111,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(TemplateSource::new(
-            "final_response_structure.md",
-            include_str!("templates/final_response_structure.md"),
-            &[],
-            |_cx| Ok(TemplateVars::new()),
-            1,
-        )),
+        source: Box::new(FinalResponseStructureSource::new(1)),
     });
 
     // ── SessionStable (was Capability + WorkspacePreference) ─────────
@@ -148,16 +130,7 @@ pub fn default_registry() -> SectionRegistry {
         version: 1,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(TemplateSource::new(
-            "shell_tooling_guide.md",
-            include_str!("templates/shell_tooling_guide.md"),
-            &["shell"],
-            |_cx| {
-                let shell = crate::core::shell_runtime::current_shell();
-                Ok(TemplateVars::new().insert("shell", shell))
-            },
-            1,
-        )),
+        source: Box::new(ShellToolingGuideSource::new(1)),
     });
 
     registry.register(SectionSpec {
@@ -277,7 +250,7 @@ pub fn default_registry() -> SectionRegistry {
     });
 
     registry.register(SectionSpec {
-        id: SectionId::SubagentBody,
+        id: SectionId::CustomSubagentBody,
         title: Cow::Borrowed("Subagent Body"),
         layer: LayerResolver::Fixed(PromptLayer::StablePrefix),
         order_hint: SectionOrder::Anchored(SectionAnchor::After(SectionId::SubagentOutputContract)),
@@ -471,8 +444,8 @@ mod tests {
             "SubagentOutputContract must not appear on MainAgent"
         );
         assert!(
-            !ids.contains(&SectionId::SubagentBody),
-            "SubagentBody must not appear on MainAgent"
+            !ids.contains(&SectionId::CustomSubagentBody),
+            "CustomSubagentBody must not appear on MainAgent"
         );
     }
 
@@ -505,8 +478,8 @@ mod tests {
                 surface
             );
             assert!(
-                ids.contains(&SectionId::SubagentBody),
-                "{:?} must have SubagentBody",
+                ids.contains(&SectionId::CustomSubagentBody),
+                "{:?} must have CustomSubagentBody",
                 surface
             );
             assert!(

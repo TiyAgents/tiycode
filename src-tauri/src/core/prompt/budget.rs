@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use super::build_context::ModelTarget;
 use super::layer::PromptLayer;
 use super::section_id::SectionId;
 use super::surface::PromptSurface;
@@ -41,7 +42,12 @@ impl Default for PromptBudget {
 
 impl PromptBudget {
     /// Create a budget tuned for a specific model's context window.
-    pub fn for_model(context_window: usize, surface: &PromptSurface) -> Self {
+    pub fn for_model(model: &ModelTarget, surface: &PromptSurface) -> Self {
+        let context_window = match model {
+            ModelTarget::AnthropicClaude { context_window, .. } => *context_window,
+            ModelTarget::OpenAiCompat { context_window } => *context_window,
+            ModelTarget::Local { context_window } => *context_window,
+        };
         let total_chars = ((context_window as f32) * 4.0 * 0.30) as usize;
         let per_section_default_chars = (total_chars as f32 * 0.10) as usize;
 
@@ -51,7 +57,7 @@ impl PromptBudget {
         per_section_overrides.insert(SectionId::FinalResponseStructure, total_chars / 4);
         // User-provided sections get tighter limits
         per_section_overrides.insert(SectionId::ProjectContext, total_chars / 8);
-        per_section_overrides.insert(SectionId::SubagentBody, total_chars / 4);
+        per_section_overrides.insert(SectionId::CustomSubagentBody, total_chars / 4);
 
         // Compaction / Title surfaces use tighter budgets
         let total_chars = match surface {
@@ -78,6 +84,13 @@ mod tests {
     use super::*;
     use crate::core::prompt::run_mode::RunMode;
 
+    fn model_200k() -> ModelTarget {
+        ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: true,
+        }
+    }
+
     #[test]
     fn default_budget_has_sane_limits() {
         let budget = PromptBudget::default();
@@ -101,8 +114,12 @@ mod tests {
 
     #[test]
     fn for_model_scales_with_context_window() {
+        let model = ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: true,
+        };
         let budget = PromptBudget::for_model(
-            200_000,
+            &model,
             &PromptSurface::MainAgent {
                 run_mode: RunMode::Default,
             },
@@ -115,8 +132,9 @@ mod tests {
 
     #[test]
     fn for_model_sets_per_section_overrides() {
+        let model = model_200k();
         let budget = PromptBudget::for_model(
-            200_000,
+            &model,
             &PromptSurface::MainAgent {
                 run_mode: RunMode::Default,
             },
@@ -138,32 +156,33 @@ mod tests {
             Some(&30_000) // total_chars / 8
         );
         assert_eq!(
-            budget.per_section_overrides.get(&SectionId::SubagentBody),
+            budget.per_section_overrides.get(&SectionId::CustomSubagentBody),
             Some(&60_000) // total_chars / 4
         );
     }
 
     #[test]
     fn compaction_surface_halves_total_chars() {
+        let model = model_200k();
         let main_budget = PromptBudget::for_model(
-            200_000,
+            &model,
             &PromptSurface::MainAgent {
                 run_mode: RunMode::Default,
             },
         );
         let compact_budget = PromptBudget::for_model(
-            200_000,
+            &model,
             &PromptSurface::Compaction {
                 kind: crate::core::prompt::surface::CompactionKind::Compact,
             },
         );
         let merge_budget = PromptBudget::for_model(
-            200_000,
+            &model,
             &PromptSurface::Compaction {
                 kind: crate::core::prompt::surface::CompactionKind::Merge,
             },
         );
-        let title_budget = PromptBudget::for_model(200_000, &PromptSurface::Title);
+        let title_budget = PromptBudget::for_model(&model, &PromptSurface::Title);
 
         assert_eq!(main_budget.total_chars, 240_000);
         assert_eq!(compact_budget.total_chars, 120_000);
@@ -173,8 +192,12 @@ mod tests {
 
     #[test]
     fn small_context_window_produces_proportional_budget() {
+        let model = ModelTarget::AnthropicClaude {
+            context_window: 32_000,
+            supports_cache_control: true,
+        };
         let budget = PromptBudget::for_model(
-            32_000,
+            &model,
             &PromptSurface::MainAgent {
                 run_mode: RunMode::Default,
             },

@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tiycore::agent::AgentTool;
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{Model, OpenAICompletionsCompat, Transport};
 
 use crate::core::context_compression::ContextTokenCalibration;
+use crate::core::prompt::CacheMarkerArbiter;
 use crate::model::provider::AgentProfileRecord;
 use crate::model::thread::{MessageRecord, ToolCallDto};
 
@@ -167,6 +169,10 @@ pub struct AgentSessionSpec {
     pub model_plan: ResolvedRuntimeModelPlan,
     pub initial_prompt: Option<String>,
     pub initial_context_calibration: ContextTokenCalibration,
+    /// Global cache marker arbiter for the request lifecycle.
+    /// Records system prompt markers and allocates message-layer quota.
+    /// Must be reset after each LLM call (§ 3.7.1).
+    pub cache_arbiter: Option<Arc<dyn CacheMarkerArbiter>>,
 }
 
 pub(crate) fn default_openai_compatible_compat(

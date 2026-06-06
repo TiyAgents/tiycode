@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use std::borrow::Cow;
 
 use crate::model::errors::AppError;
 use crate::persistence::repo::settings_repo;

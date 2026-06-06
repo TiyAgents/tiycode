@@ -566,8 +566,10 @@ pub async fn build_session_spec(
         run_repo::find_latest_with_prompt_usage_by_thread_excluding_run(pool, thread_id, run_id)
             .await?;
 
-    let system_prompt =
+    let composed_prompt =
         build_system_prompt(pool, &raw_plan, workspace_path, run_mode, thread_id).await?;
+    let system_prompt = composed_prompt.text.clone();
+    let cache_arbiter = composed_prompt.cache_arbiter;
     let extension_tools = ExtensionsManager::new(pool.clone())
         .list_runtime_agent_tools(Some(workspace_path))
         .await?;
@@ -627,6 +629,7 @@ pub async fn build_session_spec(
         model_plan: resolved_plan,
         initial_prompt: None,
         initial_context_calibration,
+        cache_arbiter,
     })
 }
 
@@ -1474,20 +1477,23 @@ async fn build_system_prompt(
     workspace_path: &str,
     run_mode: &str,
     thread_id: &str,
-) -> Result<String, AppError> {
+) -> Result<crate::core::prompt::ComposedPrompt, AppError> {
     use crate::core::prompt::{
-        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptBudget,
-        PromptSurface, RunMode, SourceExecPolicy, SystemClock,
+        BuildCx, Composer, DefaultCacheMarkerArbiter, MarkdownRenderer,
+        ModelTarget, NoopRedactor, PromptBudget, PromptSurface, RunMode, SourceExecPolicy,
+        SystemClock,
     };
     use std::sync::Arc;
 
     let rm = RunMode::from_str(run_mode);
     let registry = Arc::new(prompt::registry::default_registry());
+    let arbiter = Arc::new(DefaultCacheMarkerArbiter::new(4));
     let composer = Composer::new(
         registry,
         SourceExecPolicy::default(),
         Arc::new(NoopRedactor),
-    );
+    )
+    .with_cache_arbiter(arbiter);
 
     let cx = BuildCx {
         pool,
@@ -1511,9 +1517,9 @@ async fn build_system_prompt(
     };
 
     let surface = PromptSurface::MainAgent { run_mode: rm };
-    let budget = PromptBudget::for_model(200_000, &surface);
+    let budget = PromptBudget::for_model(&cx.target_model, &surface);
     let composed = composer.build(&surface, &cx, &budget).await?;
-    Ok(composed.text)
+    Ok(composed)
 }
 
 /// Security config for the **main** agent.  Uses a very large tool timeout so

@@ -60,7 +60,7 @@ mod tests {
             response_language: Some("English"),
         };
 
-        let budget = PromptBudget::for_model(200_000, &surface);
+        let budget = PromptBudget::for_model(&cx.target_model, &surface);
 
         let composed = composer
             .build(&surface, &cx, &budget)
@@ -147,6 +147,57 @@ mod tests {
             "subagent_review",
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn snapshot_subagent_custom() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("snap.db");
+        let pool = init_database(&db_path).await.expect("init db");
+        let workspace: &'static str = "/tmp/tiycode-snapshot-workspace";
+
+        let registry = Arc::new(default_registry());
+        let composer = Composer::new(
+            registry,
+            SourceExecPolicy::default(),
+            Arc::new(NoopRedactor),
+        );
+
+        let surface = PromptSurface::SubagentCustom {
+            slug: "my-custom-agent".into(),
+            inherited_run_mode: RunMode::Default,
+            cache_stability: crate::core::prompt::surface::SubagentCacheStability::Volatile,
+        };
+
+        let cx = BuildCx {
+            pool: &pool,
+            workspace_path: workspace,
+            thread_id: None,
+            run_id: None,
+            raw_plan: None,
+            run_mode: RunMode::Default,
+            helper_profile: None,
+            custom_subagent_slug: Some("my-custom-agent"),
+            target_model: ModelTarget::AnthropicClaude {
+                context_window: 200_000,
+                supports_cache_control: true,
+            },
+            clock: fixed_clock_for_test(),
+            signals: Arc::new(SignalCache::new()),
+            renderer: Arc::new(MarkdownRenderer),
+            response_language: Some("English"),
+        };
+
+        let budget = PromptBudget::for_model(&cx.target_model, &surface);
+        let composed = composer
+            .build(&surface, &cx, &budget)
+            .await
+            .expect("composer build");
+
+        let snapshot_text = format_audit_snapshot(&composed);
+        insta::with_settings!({ snapshot_suffix => "subagent_custom" }, {
+            insta::assert_snapshot!(snapshot_text);
+        });
     }
 
     // ── Compaction ─────────────────────────────────────────────────

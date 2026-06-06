@@ -336,6 +336,7 @@ pub(super) mod tests {
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
             initial_context_calibration: Default::default(),
+            cache_arbiter: None,
         };
 
         AgentSession::new(
@@ -410,6 +411,7 @@ pub(super) mod tests {
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
             initial_context_calibration: Default::default(),
+            cache_arbiter: None,
         };
         let session = AgentSession::new(
             pool,
@@ -999,7 +1001,8 @@ pub(super) mod tests {
             "test_thread",
         )
         .await
-        .expect("system prompt");
+        .expect("system prompt")
+        .text;
 
         assert!(prompt.contains(
             "review helper is responsible for running the necessary type-check and test commands"
@@ -1040,7 +1043,8 @@ Used for prompt assembly coverage.
             "test_thread",
         )
         .await
-        .expect("system prompt");
+        .expect("system prompt")
+        .text;
 
         assert!(prompt.contains("## Skills"));
         assert!(prompt.contains("### Available skills"));
@@ -1082,7 +1086,8 @@ Used for prompt assembly coverage.
             "test_thread",
         )
         .await
-        .expect("system prompt");
+        .expect("system prompt")
+        .text;
 
         assert!(prompt.contains("call `query_task` first"));
         assert!(prompt.contains("call `query_task` with `scope='active'`"));
@@ -4902,6 +4907,7 @@ Used for prompt assembly coverage.
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
             initial_context_calibration: Default::default(),
+            cache_arbiter: None,
         };
         let session = AgentSession::new(
             pool,
@@ -4976,6 +4982,7 @@ Used for prompt assembly coverage.
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
             initial_context_calibration: Default::default(),
+            cache_arbiter: None,
         };
         let session = AgentSession::new(
             pool,
