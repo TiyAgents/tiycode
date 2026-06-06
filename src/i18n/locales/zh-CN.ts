@@ -520,6 +520,7 @@ const zhCN = {
   "settings.agents.maxDelegationDepth": "最大被委派深度",
   "settings.agents.maxDelegationDepthDesc": "此 Agent 在委派链中可处于的最深层级。第 1 层为主 Agent，第 2 层为直接子 Agent，以此类推。默认：3。",
   "settings.agents.delegationBadge": "可委派 · 深度 {{depth}}",
+  "settings.agents.cannotDelegateBadge": "不可委派",
   "settings.agents.unsavedChanges": "有未保存修改",
   "settings.agents.unsaved": "未保存",
   "settings.agents.saved": "已保存",

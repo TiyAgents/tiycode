@@ -502,6 +502,7 @@ const en: Record<TranslationKey, string> = {
   "settings.agents.maxDelegationDepth": "Maximum delegation depth",
   "settings.agents.maxDelegationDepthDesc": "The deepest level this agent can be placed at in a delegation chain. Level 1 is the main agent, level 2 is a direct sub-agent, etc. Default: 3.",
   "settings.agents.delegationBadge": "Delegates · depth {{depth}}",
+  "settings.agents.cannotDelegateBadge": "No delegation",
   "settings.agents.unsavedChanges": "Unsaved changes",
   "settings.agents.unsaved": "Unsaved",
   "settings.agents.saved": "Saved",

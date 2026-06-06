@@ -49,6 +49,11 @@ struct ResolvedHelperDelegate {
     model_role: ResolvedModelRole,
 }
 
+/// Delegation chain depth (1-based) at which the main agent's direct delegates
+/// run. The main agent is depth 1, so its immediate sub-agents are depth 2.
+/// Shared by the resolve-time depth check and the `HelperRunRequest` it builds.
+const MAIN_AGENT_CHILD_DEPTH: u32 = 2;
+
 fn resolve_helper_tool_task(
     tool: RuntimeOrchestrationTool,
     tool_input: &serde_json::Value,
@@ -909,7 +914,6 @@ impl AgentSession {
         // Reject targets whose configured max delegation depth cannot accommodate
         // being delegated to at depth 2 (mirrors the recursive subagent path's
         // enforcement in HelperDelegationContext::resolve_delegation_sync).
-        const MAIN_AGENT_CHILD_DEPTH: u32 = 2;
         if let Some(profile) = resolved_profile.as_ref() {
             let max_depth = profile.max_delegation_depth();
             if MAIN_AGENT_CHILD_DEPTH > max_depth {
@@ -955,8 +959,7 @@ impl AgentSession {
                 event_tx: self.event_tx.clone(),
                 session_abort_signal: self.abort_signal.clone(),
                 thinking_level: self.spec.model_plan.thinking_level,
-                // The main agent is depth 1; its direct delegates are depth 2.
-                delegation_depth: 2,
+                delegation_depth: MAIN_AGENT_CHILD_DEPTH,
                 model_plan: self.spec.model_plan.clone(),
                 custom_delegation_targets,
             })
@@ -1107,7 +1110,13 @@ impl AgentSession {
         }
 
         self.checkpoint_requested.store(true, Ordering::SeqCst);
+        // Mirror AgentSession::cancel ordering: cancel in-flight tool calls,
+        // abort any in-flight subagents for this run (so a helper mid-LLM-turn
+        // stops rather than only exiting on its next poll), then abort the main
+        // agent. abort_signal child tokens already cascade into tool executions,
+        // but cancel_run is needed to stop subagent Agent run loops promptly.
         self.abort_signal.cancel();
+        self.helper_orchestrator.cancel_run(&self.spec.run_id).await;
         self.agent.abort();
 
         let result_message = match &plan_file_path {

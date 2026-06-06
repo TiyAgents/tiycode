@@ -66,16 +66,22 @@ const BUILT_IN_AGENTS: Array<{
   nameKey: TranslationKey;
   descriptionKey: TranslationKey;
   icon: typeof FileSearch;
+  canDelegate: boolean;
+  maxDelegationDepth: number;
 }> = [
   {
     nameKey: "settings.agents.builtIn.explore.name",
     descriptionKey: "settings.agents.builtIn.explore.desc",
     icon: FileSearch,
+    canDelegate: false,
+    maxDelegationDepth: 3,
   },
   {
     nameKey: "settings.agents.builtIn.review.name",
     descriptionKey: "settings.agents.builtIn.review.desc",
     icon: CheckCircle2,
+    canDelegate: true,
+    maxDelegationDepth: 3,
   },
 ];
 
@@ -617,6 +623,17 @@ export function AgentsSettingsPanel({
                   </span>
                 </div>
                 <p className="mt-3 text-[12px] leading-5 text-app-muted">{t(agent.descriptionKey)}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {agent.canDelegate ? (
+                    <span className="rounded-full border border-app-info/30 bg-app-info/10 px-2 py-0.5 text-[11px] font-medium text-app-info">
+                      {t("settings.agents.delegationBadge", { depth: agent.maxDelegationDepth })}
+                    </span>
+                  ) : (
+                    <span className="rounded-full border border-app-border bg-app-surface px-2 py-0.5 text-[11px] font-medium text-app-subtle">
+                      {t("settings.agents.cannotDelegateBadge")}
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })}

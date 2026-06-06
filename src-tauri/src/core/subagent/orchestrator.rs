@@ -122,6 +122,40 @@ pub(crate) fn resolve_delegation_task(
     Ok((task, None))
 }
 
+/// Validate that `caller_profile` may delegate to `target_profile` at
+/// `child_depth` (the 1-based depth the child would occupy). Enforces three
+/// bounds: the caller must be allowed to delegate, the child depth must not
+/// exceed the global safety maximum, and the child depth must not exceed the
+/// target's configured `max_delegation_depth`. Returns a structured error
+/// string on rejection. Pure (no I/O), so it is shared by the recursive
+/// subagent path and is directly unit-testable.
+pub(crate) fn validate_delegation_capability(
+    caller_profile: &SubagentProfile,
+    target_tool: &RuntimeOrchestrationTool,
+    target_profile: &SubagentProfile,
+    child_depth: u32,
+) -> Result<(), String> {
+    if !caller_profile.can_delegate() {
+        return Err(format!(
+            "{} is not allowed to delegate to other subagents",
+            caller_profile.helper_kind()
+        ));
+    }
+    if child_depth > GLOBAL_MAX_DELEGATION_DEPTH {
+        return Err(format!(
+            "delegation depth {child_depth} exceeds the global maximum {GLOBAL_MAX_DELEGATION_DEPTH}"
+        ));
+    }
+    if child_depth > target_profile.max_delegation_depth() {
+        return Err(format!(
+            "{} cannot be delegated at depth {child_depth} (its max delegation depth is {})",
+            target_tool.tool_name(),
+            target_profile.max_delegation_depth()
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentActivityStatus {
@@ -969,24 +1003,7 @@ impl HelperDelegationContext {
         tool_input: &serde_json::Value,
         child_depth: u32,
     ) -> Result<ResolvedDelegation, String> {
-        if !self.caller_profile.can_delegate() {
-            return Err(format!(
-                "{} is not allowed to delegate to other subagents",
-                self.caller_profile.helper_kind()
-            ));
-        }
-        if child_depth > GLOBAL_MAX_DELEGATION_DEPTH {
-            return Err(format!(
-                "delegation depth {child_depth} exceeds the global maximum {GLOBAL_MAX_DELEGATION_DEPTH}"
-            ));
-        }
-        if child_depth > profile.max_delegation_depth() {
-            return Err(format!(
-                "{} cannot be delegated at depth {child_depth} (its max delegation depth is {})",
-                tool.tool_name(),
-                profile.max_delegation_depth()
-            ));
-        }
+        validate_delegation_capability(&self.caller_profile, &tool, &profile, child_depth)?;
 
         let (task, _review_request) = resolve_delegation_task(&tool, tool_input)?;
         let model_role = crate::core::agent_session_tools::resolve_helper_model_role(
@@ -1758,5 +1775,82 @@ mod tests {
             !result.text.contains("Behavioral Guidelines"),
             "subagent prompt must not contain BehavioralGuidelines section"
         );
+    }
+
+    fn custom_profile(can_delegate: bool, max_delegation_depth: u32) -> SubagentProfile {
+        SubagentProfile::Custom {
+            slug: "deep".to_string(),
+            name: "Deep".to_string(),
+            invocation_description: "deep agent".to_string(),
+            system_prompt: "prompt".to_string(),
+            allowed_tools: vec!["read".to_string()],
+            model_role: crate::model::subagent::CustomSubagentModelRole::Auxiliary,
+            can_delegate,
+            max_delegation_depth,
+        }
+    }
+
+    #[test]
+    fn validate_delegation_rejects_caller_that_cannot_delegate() {
+        // explore.can_delegate() == false, so it may never delegate regardless of depth.
+        let err = validate_delegation_capability(
+            &SubagentProfile::Explore,
+            &RuntimeOrchestrationTool::Review,
+            &SubagentProfile::Review,
+            2,
+        )
+        .expect_err("explore must not be allowed to delegate");
+        assert!(err.contains("not allowed to delegate"));
+    }
+
+    #[test]
+    fn validate_delegation_allows_review_to_explore_at_depth_2() {
+        // Main(1) → review(2): review can delegate, explore.max=3 >= 2.
+        validate_delegation_capability(
+            &SubagentProfile::Review,
+            &RuntimeOrchestrationTool::Explore,
+            &SubagentProfile::Explore,
+            2,
+        )
+        .expect("review delegating to explore at depth 2 must be allowed");
+    }
+
+    #[test]
+    fn validate_delegation_rejects_when_child_depth_exceeds_target_max() {
+        // child_depth 4 exceeds explore.max_delegation_depth (3).
+        let err = validate_delegation_capability(
+            &SubagentProfile::Review,
+            &RuntimeOrchestrationTool::Explore,
+            &SubagentProfile::Explore,
+            4,
+        )
+        .expect_err("depth 4 must exceed explore max depth 3");
+        assert!(err.contains("max delegation depth is 3"));
+    }
+
+    #[test]
+    fn validate_delegation_rejects_when_child_depth_exceeds_global_max() {
+        // Even a custom target with max=5 cannot be reached beyond the global bound.
+        let target = custom_profile(true, 5);
+        let err = validate_delegation_capability(
+            &SubagentProfile::Review,
+            &RuntimeOrchestrationTool::Custom("deep".to_string()),
+            &target,
+            GLOBAL_MAX_DELEGATION_DEPTH + 1,
+        )
+        .expect_err("depth beyond global max must be rejected");
+        assert!(err.contains("global maximum"));
+    }
+
+    #[test]
+    fn validate_delegation_allows_custom_target_within_its_configured_depth() {
+        let target = custom_profile(true, 5);
+        validate_delegation_capability(
+            &SubagentProfile::Review,
+            &RuntimeOrchestrationTool::Custom("deep".to_string()),
+            &target,
+            5,
+        )
+        .expect("custom target with max depth 5 must be reachable at depth 5");
     }
 }

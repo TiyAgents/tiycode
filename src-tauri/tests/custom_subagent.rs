@@ -366,3 +366,53 @@ async fn custom_subagent_delegation_fields_persist_and_clamp() {
     assert!(!updated.can_delegate);
     assert_eq!(updated.max_delegation_depth, 1, "depth must clamp to 1");
 }
+
+#[tokio::test]
+async fn db_check_rejects_out_of_range_delegation_values() {
+    // The repo layer clamps inputs, so the DB CHECK constraints are normally
+    // unreachable through the public API. This test bypasses the repo with raw
+    // SQL to assert the schema-level guards still reject illegal values, guarding
+    // against future code paths that write the columns directly.
+    let pool = setup_test_pool().await;
+
+    let insert = |id: &str, can_delegate: i64, depth: i64| {
+        let sql = "INSERT INTO custom_subagents \
+             (id, name, slug, system_prompt, invocation_description, allowed_tools, model_role, is_enabled, can_delegate, max_delegation_depth, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        sqlx::query(sql)
+            .bind(id.to_string())
+            .bind("Raw")
+            .bind(id.to_string())
+            .bind("prompt")
+            .bind("desc")
+            .bind("[]")
+            .bind("auxiliary")
+            .bind(1_i64)
+            .bind(can_delegate)
+            .bind(depth)
+            .bind("now")
+            .bind("now")
+            .execute(&pool)
+    };
+
+    // depth = 0 violates max_delegation_depth >= 1.
+    assert!(
+        insert("too-low", 0, 0).await.is_err(),
+        "DB CHECK must reject max_delegation_depth = 0"
+    );
+    // depth = 6 violates max_delegation_depth <= 5.
+    assert!(
+        insert("too-high", 0, 6).await.is_err(),
+        "DB CHECK must reject max_delegation_depth = 6"
+    );
+    // can_delegate = 2 violates can_delegate IN (0, 1).
+    assert!(
+        insert("bad-flag", 2, 3).await.is_err(),
+        "DB CHECK must reject can_delegate = 2"
+    );
+    // A legal row still inserts.
+    assert!(
+        insert("ok-row", 1, 5).await.is_ok(),
+        "valid delegation values must insert successfully"
+    );
+}

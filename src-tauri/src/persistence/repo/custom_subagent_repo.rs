@@ -46,6 +46,11 @@ impl SubagentRow {
 
 const SUBAGENT_COLUMNS: &str = "id, name, slug, system_prompt, invocation_description, allowed_tools, model_role, is_enabled, can_delegate, max_delegation_depth, created_at, updated_at";
 
+/// Same column list as `SUBAGENT_COLUMNS` but qualified with the `s.` table
+/// alias, for queries that JOIN `custom_subagents AS s`. Kept beside the base
+/// constant so adding a column only requires updating both in one place.
+const SUBAGENT_COLUMNS_PREFIXED: &str = "s.id, s.name, s.slug, s.system_prompt, s.invocation_description, s.allowed_tools, s.model_role, s.is_enabled, s.can_delegate, s.max_delegation_depth, s.created_at, s.updated_at";
+
 // ---------------------------------------------------------------------------
 // CRUD operations
 // ---------------------------------------------------------------------------
@@ -306,7 +311,7 @@ pub async fn list_for_profile(
     profile_id: &str,
 ) -> Result<Vec<CustomSubagentRecord>, AppError> {
     let rows = sqlx::query_as::<_, SubagentRow>(&format!(
-        "SELECT s.id, s.name, s.slug, s.system_prompt, s.invocation_description, s.allowed_tools, s.model_role, s.is_enabled, s.can_delegate, s.max_delegation_depth, s.created_at, s.updated_at \
+        "SELECT {SUBAGENT_COLUMNS_PREFIXED} \
          FROM custom_subagents s \
          INNER JOIN profile_subagent_access a ON s.id = a.subagent_id \
          WHERE a.profile_id = ? AND s.is_enabled = 1 \
