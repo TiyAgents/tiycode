@@ -34,9 +34,6 @@ pub(super) mod tests {
     use crate::core::plan_checkpoint::{
         build_plan_artifact_from_tool_input, build_plan_message_metadata,
     };
-    use crate::core::prompt::providers::{
-        final_response_structure_system_instruction, run_mode_prompt_body,
-    };
     use crate::core::subagent::{
         HelperAgentOrchestrator, RuntimeOrchestrationTool, SubagentProfile,
     };
@@ -48,6 +45,38 @@ pub(super) mod tests {
     use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto, ToolCallDto};
     use crate::persistence::init_database;
     use crate::persistence::repo::provider_repo;
+
+    /// Strip YAML front-matter (delimited by ---) from a template string.
+    fn strip_front_matter(tpl: &str) -> &str {
+        let tpl = tpl.trim_start();
+        if !tpl.starts_with("---") {
+            return tpl;
+        }
+        let after_first = &tpl[3..];
+        if let Some(end) = after_first.find("\n---") {
+            let body = after_first[end + 4..].trim_start();
+            return body;
+        }
+        tpl
+    }
+
+    /// Load a final response structure template body for assertions.
+    fn final_response_structure_body() -> String {
+        strip_front_matter(include_str!("prompt/templates/final_response_structure.md")).to_string()
+    }
+
+    /// Load a run mode template body with term_panel_usage_note substituted.
+    fn run_mode_body(plan: bool) -> String {
+        let tpl = if plan {
+            include_str!("prompt/templates/run_mode.plan.md")
+        } else {
+            include_str!("prompt/templates/run_mode.default.md")
+        };
+        strip_front_matter(tpl).replace(
+            "{{term_panel_usage_note}}",
+            crate::core::subagent::TERM_PANEL_USAGE_NOTE,
+        )
+    }
 
     const TEST_CONTEXT_WINDOW: &str = "128000";
     const TEST_MODEL_DISPLAY_NAME: &str = "GPT Test";
@@ -856,7 +885,7 @@ pub(super) mod tests {
 
     #[test]
     fn final_response_structure_instruction_matches_task_types_and_markdown_hierarchy() {
-        let instruction = final_response_structure_system_instruction();
+        let instruction = final_response_structure_body();
 
         assert!(instruction.contains("at most two heading levels"));
         assert!(instruction.contains("avoid turning every sub-point into its own heading"));
@@ -872,7 +901,7 @@ pub(super) mod tests {
     fn final_response_structure_section_is_distinct_from_response_style_rules() {
         let section = format!(
             "## Final Response Structure\n{}",
-            final_response_structure_system_instruction()
+            final_response_structure_body()
         );
         let balanced = response_style_system_instruction(ProfileResponseStyle::Balanced);
 
@@ -884,8 +913,8 @@ pub(super) mod tests {
 
     #[test]
     fn run_mode_prompt_clarifies_terminal_panel_scope() {
-        let plan_prompt = run_mode_prompt_body("plan");
-        let default_prompt = run_mode_prompt_body("default");
+        let plan_prompt = run_mode_body(true);
+        let default_prompt = run_mode_body(false);
 
         assert!(plan_prompt.contains("embedded Terminal panel"));
         assert!(plan_prompt.contains("update_plan"));
@@ -2514,7 +2543,7 @@ Used for prompt assembly coverage.
 
     #[test]
     fn plan_mode_prompt_mentions_waiting_for_approval_after_update_plan() {
-        let prompt = run_mode_prompt_body("plan");
+        let prompt = run_mode_body(true);
 
         assert!(prompt.contains("clarify"));
         assert!(prompt.contains("does NOT complete the run"));
@@ -2535,7 +2564,7 @@ Used for prompt assembly coverage.
 
     #[test]
     fn default_mode_prompt_mentions_clarify_for_missing_information() {
-        let prompt = run_mode_prompt_body("default");
+        let prompt = run_mode_body(false);
 
         assert!(prompt.contains("Use clarify instead of guessing"));
         assert!(prompt.contains("multiple reasonable approaches"));
@@ -2544,7 +2573,7 @@ Used for prompt assembly coverage.
 
     #[test]
     fn default_mode_prompt_references_update_plan_quality_contract() {
-        let prompt = run_mode_prompt_body("default");
+        let prompt = run_mode_body(false);
 
         assert!(prompt.contains("follow the quality contract"));
         assert!(prompt.contains("update_plan tool description"));

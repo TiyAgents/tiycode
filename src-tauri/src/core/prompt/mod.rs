@@ -1,8 +1,9 @@
 // ── Section sources (one per SectionId, each in sources/) ────────
 pub mod sources;
 
-// ── Backward-compat test utilities (not used in production) ─────
-pub mod providers;
+// ── Snapshot tests ───────────────────────────────────────────────
+#[cfg(test)]
+mod snapshot_tests;
 
 // ── Core architecture modules ───────────────────────────────────
 pub mod budget;

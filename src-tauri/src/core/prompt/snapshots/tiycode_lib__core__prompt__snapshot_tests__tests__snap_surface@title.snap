@@ -1,0 +1,11 @@
+---
+source: src/core/prompt/snapshot_tests.rs
+expression: snapshot_text
+---
+=== COMPOSED PROMPT TEXT ===
+## Title Contract
+You write concise conversation titles. Return only the title text.
+
+=== AUDIT ===
+schema_version: 3
+id=TitleContract layer=StablePrefix version=1 bytes=66 tokens=21 truncated=false renderer=markdown

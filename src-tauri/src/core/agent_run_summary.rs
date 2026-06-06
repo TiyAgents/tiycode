@@ -62,11 +62,12 @@ pub(crate) fn extract_run_model_refs(
 
 /// Phase 6: User message constructor for implementation handoff after plan approval.
 ///
+/// Template text is externalized in `templates/handoff/with_plan.tpl.md` and
+/// `templates/handoff/without_plan.tpl.md`.  The function parses the front-matter
+/// to strip metadata, then fills the body with the action-specific variables.
+///
 /// This function does NOT duplicate ProfileInstructions text (response language/style)
 /// because those are already injected into the system prompt by the Composer.
-/// If future changes require response language/style in this user message, use
-/// `Composer::render_section_only(SectionId::ProfileInstructions, …)` to obtain
-/// the same text fragment rather than hardcoding a parallel copy.
 /// See docs/prompt-injection-refactor.md § 3.21.
 pub(crate) fn build_implementation_handoff_prompt(
     thread_id: &str,
@@ -85,21 +86,67 @@ pub(crate) fn build_implementation_handoff_prompt(
         .filter(|path| path.exists())
         .map(|path| format!("\n- Plan file on disk: {}", path.display()))
         .unwrap_or_default();
+
     match action {
         PlanApprovalAction::ApplyPlan => {
             let plan_markdown = crate::core::plan_checkpoint::plan_markdown(metadata);
-
-            format!(
-                "Implementation handoff:\n- {action_note}\n- Plan revision: {}{plan_file_note}\n- Treat the approved plan below as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.\n- After implementation, use agent_review with planFilePath to verify each plan step was completed.\n\nApproved plan:\n{}",
-                metadata.artifact.plan_revision,
-                plan_markdown
+            render_handoff_template(
+                include_str!("prompt/templates/handoff/with_plan.tpl.md"),
+                action_note,
+                &metadata.artifact.plan_revision.to_string(),
+                &plan_file_note,
+                &plan_markdown,
             )
         }
-        PlanApprovalAction::ApplyPlanWithContextReset => format!(
-            "Implementation handoff:\n- {action_note}\n- Plan revision: {}{plan_file_note}\n- The reset context already includes a historical summary and the approved plan.\n- Treat the approved plan in context as the implementation baseline.\n- If the plan turns out to be invalid or incomplete, pause and return to planning before making a different change.\n- After implementation, use agent_review with planFilePath to verify each plan step was completed.",
-            metadata.artifact.plan_revision,
+        PlanApprovalAction::ApplyPlanWithContextReset => render_handoff_template_no_plan(
+            include_str!("prompt/templates/handoff/without_plan.tpl.md"),
+            action_note,
+            &metadata.artifact.plan_revision.to_string(),
+            &plan_file_note,
         ),
     }
+}
+
+/// Strip YAML front-matter and return the template body.
+fn strip_front_matter(tpl: &str) -> &str {
+    let tpl = tpl.trim_start();
+    if !tpl.starts_with("---") {
+        return tpl;
+    }
+    let after_first = &tpl[3..];
+    if let Some(end) = after_first.find("\n---") {
+        let body = after_first[end + 4..].trim_start();
+        return body;
+    }
+    tpl
+}
+
+/// Render a handoff template that includes plan markdown.
+fn render_handoff_template(
+    tpl: &str,
+    action_note: &str,
+    plan_revision: &str,
+    plan_file_note: &str,
+    plan_markdown: &str,
+) -> String {
+    let body = strip_front_matter(tpl);
+    body.replace("{{action_note}}", action_note)
+        .replace("{{plan_revision}}", plan_revision)
+        .replace("{{plan_file_note}}", plan_file_note)
+        .replace("{{plan_markdown}}", plan_markdown)
+}
+
+/// Render a handoff template without plan markdown.
+fn render_handoff_template_no_plan(
+    tpl: &str,
+    action_note: &str,
+    plan_revision: &str,
+    plan_file_note: &str,
+) -> String {
+    let body = strip_front_matter(tpl);
+    body.replace("{{action_note}}", action_note)
+        .replace("{{plan_revision}}", plan_revision)
+        .replace("{{plan_file_note}}", plan_file_note)
 }
 
 /// Returns the model to use for primary summary generation.
