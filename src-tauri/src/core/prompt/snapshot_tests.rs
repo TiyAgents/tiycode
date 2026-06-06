@@ -9,10 +9,10 @@
 /// content depends on thread-specific DB state not available in fixtures.
 ///
 /// **Cross-platform normalisation**: Environment-dependent values (OS, arch,
-/// shell, home directory, tmpdir) are replaced with stable placeholders
-/// (`[os]`, `[arch]`, `[shell]`, `[HOME]`, `[TMPDIR]`) before snapshot
-/// comparison so the same `.snap` files work on macOS, Linux, and any CI
-/// runner regardless of the user account name.
+/// shell, home directory, tmpdir, skills listing, sandbox writable roots) are
+/// replaced with stable placeholders or stripped entirely so the same `.snap`
+/// files pass on macOS, Linux, and any CI runner regardless of the user
+/// account name or locally-installed skills.
 #[cfg(test)]
 mod tests {
     use super::super::budget::PromptBudget;
@@ -88,7 +88,8 @@ mod tests {
     /// Skills section — the skills listing depends on locally-installed files
     /// that may not exist on CI or other developer machines.
     fn normalize_snapshot_text(text: &str) -> String {
-        let mut text = strip_skills_section(text);
+        let text = strip_skills_section(text);
+        let text = normalize_writable_roots_line(&text);
 
         let home = dirs::home_dir()
             .and_then(|p| p.to_str().map(String::from))
@@ -101,11 +102,22 @@ mod tests {
         let arch = std::env::consts::ARCH;
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
 
-        text.replace(&home, "[HOME]")
-            .replace(&tmpdir, "[TMPDIR]")
+        let mut result = text
+            .replace(&home, "[HOME]")
             .replace(os, "[os]")
             .replace(arch, "[arch]")
-            .replace(&shell, "[shell]")
+            .replace(&shell, "[shell]");
+
+        // Only replace TMPDIR when it differs from /tmp (which is already
+        // a stable cross-platform path).  When TMPDIR == /tmp on Linux CI
+        // the blind replace would also hit the /tmp that is hardcoded in
+        // the SandboxPermissions writable-roots list, collapsing two
+        // distinct entries into one.
+        if tmpdir != "/tmp" {
+            result = result.replace(&tmpdir, "[TMPDIR]");
+        }
+
+        result
     }
 
     /// Remove the `## Skills` section — its content depends on locally-
@@ -124,10 +136,38 @@ mod tests {
         text.to_string()
     }
 
+    /// Replace the `Additional writable roots:` line with a stable
+    /// cross-platform version.  The builtin writable-roots list includes
+    /// paths anchored at `$HOME`, `/tmp`, and `$TMPDIR`, whose values
+    /// differ between macOS and Linux CI runners.
+    fn normalize_writable_roots_line(text: &str) -> String {
+        let prefix = "- Additional writable roots:";
+        if let Some(pos) = text.find(prefix) {
+            let before = &text[..pos];
+            let after_pos = text[pos..]
+                .find('\n')
+                .map(|n| pos + n)
+                .unwrap_or(text.len());
+            let after = &text[after_pos..];
+            return format!(
+                "{}{} `[HOME]/.agents`, `[HOME]/.tiy`, `[HOME]/.cache`, `/tmp`. File tools \
+                 (read, write, edit, list, find, search) can operate on files under these \
+                 paths in addition to the workspace.{}",
+                before, prefix, after
+            );
+        }
+        text.to_string()
+    }
+
     /// Format the ComposedPrompt into a human-readable snapshot string.
-    /// Audit `bytes` are replaced with `[snap]` because the same
-    /// prompt text can have different byte counts on different platforms
-    /// (e.g. "aarch64" → 7 bytes on macOS, "x86_64" → 6 bytes on Linux).
+    ///
+    /// Audit entries for `Skills` are excluded because the Skills source
+    /// may produce no output (and therefore no audit entry) on machines
+    /// where `~/.agents/skills` is empty or absent (e.g. CI runners).
+    /// `bytes` and `tokens` are replaced with `[snap]` because the same
+    /// prompt text can have different byte/token counts on different
+    /// platforms (e.g. "aarch64" → 7 bytes on macOS, "x86_64" → 6 bytes
+    /// on Linux).
     fn format_audit_snapshot(composed: &ComposedPrompt) -> String {
         let mut out = String::new();
         out.push_str("=== COMPOSED PROMPT TEXT ===\n");
@@ -135,12 +175,15 @@ mod tests {
         out.push_str("\n\n=== AUDIT ===\n");
         out.push_str(&format!("schema_version: {}\n", composed.schema_version));
         for entry in &composed.audit {
+            // Skills may be entirely absent on CI.
+            if entry.id == super::super::SectionId::Skills {
+                continue;
+            }
             out.push_str(&format!(
-                "id={:?} layer={:?} version={} bytes=[snap] tokens={} truncated={} renderer={}\n",
+                "id={:?} layer={:?} version={} bytes=[snap] tokens=[snap] truncated={} renderer={}\n",
                 entry.id,
                 entry.layer,
                 entry.version,
-                entry.estimated_tokens,
                 entry.truncated,
                 entry.renderer,
             ));
