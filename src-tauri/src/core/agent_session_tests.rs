@@ -992,10 +992,10 @@ pub(super) mod tests {
         .text;
 
         assert!(prompt.contains(
-            "review helper is responsible for running the necessary type-check and test commands"
+            "the review helper runs the necessary type-check and test commands and returns the results"
         ));
         assert!(prompt.contains(
-            "Do not rerun the same verification commands yourself unless the helper explicitly could not run them"
+            "Do not rerun the same commands yourself unless the helper could not run them"
         ));
     }
 
@@ -1076,9 +1076,8 @@ Used for prompt assembly coverage.
         .expect("system prompt")
         .text;
 
-        assert!(prompt.contains("call `query_task` first"));
         assert!(prompt.contains("call `query_task` with `scope='active'`"));
-        assert!(prompt.contains("Use `query_task` with `scope='all'` only"));
+        assert!(prompt.contains("use `scope='all'` only when you need history"));
     }
 
     #[test]
@@ -2558,18 +2557,18 @@ Used for prompt assembly coverage.
     fn default_mode_prompt_mentions_clarify_for_missing_information() {
         let prompt = run_mode_body(false);
 
-        assert!(prompt.contains("Use clarify instead of guessing"));
-        assert!(prompt.contains("multiple reasonable approaches"));
-        assert!(prompt.contains("approve a risky action"));
+        assert!(prompt.contains("clarify first when an unresolved requirement blocks that plan"));
+        assert!(prompt.contains("follow the general guidelines above"));
     }
 
     #[test]
     fn default_mode_prompt_references_update_plan_quality_contract() {
         let prompt = run_mode_body(false);
 
-        assert!(prompt.contains("follow the quality contract"));
-        assert!(prompt.contains("update_plan tool description"));
-        assert!(prompt.contains("Explore the codebase first"));
+        assert!(prompt.contains(
+            "publish a plan with update_plan before implementation when the work is complex"
+        ));
+        assert!(prompt.contains("Prefer the smallest sufficient action"));
     }
 
     #[test]
