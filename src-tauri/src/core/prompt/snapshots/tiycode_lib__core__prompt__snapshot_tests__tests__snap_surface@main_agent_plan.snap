@@ -81,12 +81,12 @@ For conclusion-oriented replies, choose a structure that matches the task instea
 
   - Direct explanation or question answering: direct answer -> key points 1, 2, and 3 if relevant -> examples or evidence when helpful -> next step only if it adds value.
 - Do not force explicit headings on every reply unless the task benefits from a more structured presentation.
-- Write complete, grammatically whole sentences in every bullet point and paragraph. Avoid telegraph-style fragments (e.g. bare noun phrases like 'Plugin 执行协议已改为结构化'). Instead write full sentences that include subject, verb, and enough context to stand on their own.
+- Write complete, grammatically whole sentences in every bullet point and paragraph. Avoid telegraph-style fragments (e.g. bare noun phrases like 'Plugin protocol now structured'). Instead write full sentences that include subject, verb, and enough context to stand on their own.
 - When three or more closely related points share a single theme, merge them into one short paragraph with a topic sentence instead of listing each as a separate bullet.
 - If a single section exceeds roughly 8-10 lines of output, consider whether it should be split into two sections with distinct headers, or whether some detail can be folded into a summary sentence.
 
 ## Shell Tooling Guide
-- Shell commands run through the user's default shell (`[shell]`).
+- Shell commands run through the user's default shell shown in the System Environment section above.
 - This section is a shell command selection and boundary guide. Prefer workspace-aware tools (`read`, `list`, `search`, `find`, `edit`) before shell when they fit.
 - Use `shell` for one-shot non-interactive commands in the workspace.
 - Use `term_status`, `term_output`, `term_write`, `term_restart`, and `term_close` only for the desktop app's embedded Terminal panel session for the current thread. They inspect or control that persistent panel session and do not replace one-shot `shell` execution.
@@ -124,8 +124,8 @@ Workspace path: /tiycode-snap-workspace
 schema_version: 3
 id=Role layer=StablePrefix version=2 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
 id=BehavioralGuidelines layer=StablePrefix version=2 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
-id=FinalResponseStructure layer=StablePrefix version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
-id=ShellToolingGuide layer=SessionStable version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=FinalResponseStructure layer=StablePrefix version=2 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=ShellToolingGuide layer=SessionStable version=2 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
 id=SystemEnvironment layer=RuntimeOverlay version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
 id=SandboxPermissions layer=RuntimeOverlay version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
 id=RunMode layer=RuntimeOverlay version=2 bytes=[snap] tokens=[snap] truncated=false renderer=markdown

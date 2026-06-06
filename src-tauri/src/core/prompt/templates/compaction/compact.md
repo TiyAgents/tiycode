@@ -1,6 +1,6 @@
 ---
 section_id: CompactionCompactContract
-version: 1
+version: 2
 declared_keys: ["response_language_line"]
 ---
 You compress conversation state so another model can continue after context reset.

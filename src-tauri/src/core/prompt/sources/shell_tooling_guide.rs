@@ -11,7 +11,7 @@ use super::super::templates::{
 
 const TEMPLATE_REL_PATH: &str = "shell_tooling_guide.md";
 const TEMPLATE_EMBEDDED: &str = include_str!("../templates/shell_tooling_guide.md");
-const DECLARED_KEYS: &[&'static str] = &["shell"];
+const DECLARED_KEYS: &[&'static str] = &[];
 
 pub struct ShellToolingGuideSource {
     spec_version: u32,
@@ -48,8 +48,7 @@ impl SectionSource for ShellToolingGuideSource {
             ));
         }
 
-        let shell = crate::core::shell_runtime::current_shell();
-        let vars = TemplateVars::new().insert("shell", shell);
+        let vars = TemplateVars::new();
         let rendered = render_template_strict(&body, DECLARED_KEYS, &vars).map_err(|e| {
             FatalError::new(
                 codes::TEMPLATE_MISSING_KEY,

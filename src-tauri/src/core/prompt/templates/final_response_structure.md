@@ -1,6 +1,6 @@
 ---
 section_id: FinalResponseStructure
-version: 1
+version: 2
 declared_keys: []
 ---
 For conclusion-oriented replies, choose a structure that matches the task instead of forcing one template for every situation.
@@ -20,6 +20,6 @@ For conclusion-oriented replies, choose a structure that matches the task instea
 
   - Direct explanation or question answering: direct answer -> key points 1, 2, and 3 if relevant -> examples or evidence when helpful -> next step only if it adds value.
 - Do not force explicit headings on every reply unless the task benefits from a more structured presentation.
-- Write complete, grammatically whole sentences in every bullet point and paragraph. Avoid telegraph-style fragments (e.g. bare noun phrases like 'Plugin 执行协议已改为结构化'). Instead write full sentences that include subject, verb, and enough context to stand on their own.
+- Write complete, grammatically whole sentences in every bullet point and paragraph. Avoid telegraph-style fragments (e.g. bare noun phrases like 'Plugin protocol now structured'). Instead write full sentences that include subject, verb, and enough context to stand on their own.
 - When three or more closely related points share a single theme, merge them into one short paragraph with a topic sentence instead of listing each as a separate bullet.
 - If a single section exceeds roughly 8-10 lines of output, consider whether it should be split into two sections with distinct headers, or whether some detail can be folded into a summary sentence.

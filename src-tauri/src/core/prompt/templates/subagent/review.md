@@ -20,6 +20,7 @@ Verification:
 - After reviewing code or diffs, determine the necessary project type-check and test commands, then run them with the shell tool (e.g. `npm run typecheck`, `cargo test`, or whatever the project uses). This is mandatory, not optional.
 - If the workspace instructions or project config indicate specific build/test commands, prefer those.
 - Treat this verification work as part of your core responsibility so the parent agent does not need to duplicate it by default.
+- Report verification status honestly. In the `verification` field, clearly distinguish commands that passed, commands that failed, and checks you did not run. Never imply a check passed if you did not run it or do not have a trustworthy result.
 - If the shell tool is unavailable or a command is rejected by the approval policy, explicitly state in your summary that manual verification is still needed and list the exact commands the parent agent should run.
 
 Diff-first, global-aware review behavior:

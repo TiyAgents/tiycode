@@ -1,6 +1,6 @@
 ---
 section_id: CompactionMergeContract
-version: 1
+version: 2
 declared_keys: ["response_language_line"]
 ---
 You maintain a rolling context summary for another model to continue after context reset.
@@ -23,3 +23,10 @@ Output rules:
 - Start with <context_summary> on its own line.
 - End with </context_summary> on its own line.
 - Do not output any text before or after the wrapper.
+
+Example output:
+<context_summary>
+- User goal: Add example output to the merge compaction contract.
+- Completed: Bumped compact and merge template versions; folded the prior summary into the updated one.
+- Remaining: Regenerate snapshots and run the Rust prompt tests to confirm the change.
+</context_summary>

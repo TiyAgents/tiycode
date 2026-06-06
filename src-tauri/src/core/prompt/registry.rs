@@ -108,10 +108,10 @@ pub fn default_registry() -> SectionRegistry {
         layer: LayerResolver::Fixed(PromptLayer::StablePrefix),
         order_hint: SectionOrder::Anchored(SectionAnchor::After(SectionId::BehavioralGuidelines)),
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyMainAgent]),
-        version: 1,
+        version: 2,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(FinalResponseStructureSource::new(1)),
+        source: Box::new(FinalResponseStructureSource::new(2)),
     });
 
     // ── SessionStable (was Capability + WorkspacePreference) ─────────
@@ -127,10 +127,10 @@ pub fn default_registry() -> SectionRegistry {
             SurfacePattern::AnyMainAgent,
             SurfacePattern::AnySubagent,
         ]),
-        version: 1,
+        version: 2,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(ShellToolingGuideSource::new(1)),
+        source: Box::new(ShellToolingGuideSource::new(2)),
     });
 
     registry.register(SectionSpec {
@@ -295,10 +295,10 @@ pub fn default_registry() -> SectionRegistry {
         layer: LayerResolver::Fixed(PromptLayer::StablePrefix),
         order_hint: SectionOrder::First,
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyCompaction]),
-        version: 1,
+        version: 2,
         max_chars: None,
         criticality: SectionCriticality::NonCritical,
-        source: Box::new(CompactionContractSource::new(1)),
+        source: Box::new(CompactionContractSource::new(2)),
     });
 
     registry.register(SectionSpec {

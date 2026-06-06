@@ -1,9 +1,9 @@
 ---
 section_id: ShellToolingGuide
-version: 1
-declared_keys: ["shell"]
+version: 2
+declared_keys: []
 ---
-- Shell commands run through the user's default shell (`{{shell}}`).
+- Shell commands run through the user's default shell shown in the System Environment section above.
 - This section is a shell command selection and boundary guide. Prefer workspace-aware tools (`read`, `list`, `search`, `find`, `edit`) before shell when they fit.
 - Use `shell` for one-shot non-interactive commands in the workspace.
 - Use `term_status`, `term_output`, `term_write`, `term_restart`, and `term_close` only for the desktop app's embedded Terminal panel session for the current thread. They inspect or control that persistent panel session and do not replace one-shot `shell` execution.
