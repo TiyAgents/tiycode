@@ -81,10 +81,10 @@ pub fn default_registry() -> SectionRegistry {
             SurfacePattern::AnyMainAgent,
             SurfacePattern::AnySubagent,
         ]),
-        version: 1,
+        version: 2,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(RoleSource::new(1)),
+        source: Box::new(RoleSource::new(2)),
     });
 
     registry.register(SectionSpec {
@@ -93,13 +93,13 @@ pub fn default_registry() -> SectionRegistry {
         layer: LayerResolver::Fixed(PromptLayer::StablePrefix),
         order_hint: SectionOrder::Anchored(SectionAnchor::After(SectionId::Role)),
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyMainAgent]),
-        version: 1,
+        version: 2,
         // Behavioral guidelines is the largest static section (~7.5 KB).
         // Cap at 20 KB to leave headroom for future additions while still
         // bounding worst-case growth.
         max_chars: Some(20_000),
         criticality: SectionCriticality::Critical,
-        source: Box::new(BehavioralGuidelinesSource::new(1)),
+        source: Box::new(BehavioralGuidelinesSource::new(2)),
     });
 
     registry.register(SectionSpec {
@@ -215,10 +215,10 @@ pub fn default_registry() -> SectionRegistry {
         layer: LayerResolver::Fixed(PromptLayer::RuntimeOverlay),
         order_hint: SectionOrder::Anchored(SectionAnchor::After(SectionId::SandboxPermissions)),
         surfaces: SurfaceMatcher::Any(vec![SurfacePattern::AnyMainAgent]),
-        version: 1,
+        version: 2,
         max_chars: None,
         criticality: SectionCriticality::Critical,
-        source: Box::new(RunModeSource::new(1)),
+        source: Box::new(RunModeSource::new(2)),
     });
 
     registry.register(SectionSpec {

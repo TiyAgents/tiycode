@@ -89,7 +89,7 @@ mod tests {
     /// RunModeSource idempotency across both plan and default modes.
     #[tokio::test]
     async fn source_idempotency_run_mode() {
-        let source = RunModeSource::new(1);
+        let source = RunModeSource::new(2);
 
         for mode in &[RunMode::Default, RunMode::Plan] {
             let cx = test_cx().await;
@@ -121,7 +121,7 @@ mod tests {
     /// RunModeSource: plan mode and default mode must produce different outputs.
     #[tokio::test]
     async fn run_mode_plan_vs_default_differ() {
-        let source = RunModeSource::new(1);
+        let source = RunModeSource::new(2);
         let base_cx = test_cx().await;
 
         let cx_plan = BuildCx {

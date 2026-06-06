@@ -1,6 +1,6 @@
 ---
 section_id: RunModePlan
-version: 1
+version: 2
 declared_keys: ["term_panel_usage_note"]
 ---
 Plan mode is active.
