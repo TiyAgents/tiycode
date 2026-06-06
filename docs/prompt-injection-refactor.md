@@ -53,7 +53,6 @@
 | `PromptBudget::for_model` 按 model context window 计算 | § 3.12 |
 | `CustomSubagent` 的 `cache_stability` 进入 `PromptSurface`（非 profile） | § 3.2.1 |
 | `BuildCx` 完整字段（含 `custom_subagent_slug` / `target_model` / `clock`） | § 3.6 |
-| `SectionRenderer` 灰度切换路径（与 schema_version 协同） | § 3.14 |
 | `Composer::render_section_only` 隔离 BuildCx | § 3.21 |
 | `Composer` 入口签名：registry 在构造时注入，`build` 不传 | § 3.3 / § 6 |
 
@@ -142,14 +141,14 @@ system_prompt.push_str(&goal_block);
 |---|---|---|
 | **Provider 顺序硬编码** | `assembler.rs:18-22` 把 5 个 Provider 写死 | 新增 Provider 必须改装配器 |
 | **`order_in_phase` 跨 Provider 冲突** | `Profile.run_mode = 30`、`Environment.sandbox_permissions = 20`，没有命名空间 | 多 Provider 协作排序困难 |
-| **Section 数据流双向损失** | 子代理通过字符串解析回来过滤 | 渲染格式改动会破坏继承；难做 i18n、版本灰度 |
+| **Section 数据流双向损失** | 子代理通过字符串解析回来过滤 | 渲染格式改动会破坏继承；难做 i18n |
 | **巨型字面量内嵌代码** | `Behavioral Guidelines` 单条 body > 6KB，单行 | 改一个 bullet 就动一个 .rs 文件；diff 噪音大；无法直接给运营/PM 编辑 |
 | **静态/动态混杂** | `current_date` 被写入 system prompt，破坏 prompt-prefix cache 的稳定性 | LLM 端缓存命中率受影响 |
 | **事后注入是特殊路径** | `inject_goal_context` 字符串拼接 | 后续 Active Plan、Active Task Board 都会重复这种反模式 |
 | **失败硬阻塞** | 任意 Provider 返回 `Err` 都会让整个 system prompt 构建失败 | 例如 Skills 列表读取失败时不应阻塞主代理启动 |
-| **缺乏可观测性** | 没有 token / 长度 / Section 命中率指标 | 难调优、难灰度、难定位"为什么这次 prompt 长了 30%" |
+| **缺乏可观测性** | 没有 token / 长度 / Section 命中率指标 | 难调优、难定位"为什么这次 prompt 长了 30%" |
 | **缺乏长度预算** | 任意 Provider 可输出无限文本 | 极端工作区下系统 prompt 膨胀，吃光 user message 上下文窗口 |
-| **测试薄弱** | `providers.rs` 仅 2 个单测 | 重构、灰度都缺安全网 |
+| **测试薄弱** | `providers.rs` 仅 2 个单测 | 重构都缺安全网 |
 | **多 Surface 重复实现** | summary / title / subagent 各自手写共享原语（响应语言、风格） | 一处改风格规则需要扫多处 |
 
 ---
@@ -1085,7 +1084,7 @@ Composer 行为：
 3. **底线保护**：仍超限 → StablePrefix 内的 Section 截断而非删除（删除会破坏行为契约）
 4. 全程审计落 `ComposedPrompt.warnings`，触发 `prompt.budget.truncated` / `prompt.budget.evicted` metric，超阈值告警
 
-`PromptBudget` 的实际数值是**运行时配置**，**不进入 schema_version**（§ 3.19）；但调整默认值 / 默认 eviction 顺序需要发版说明 + 灰度。
+`PromptBudget` 的实际数值是**运行时配置**，**不进入 schema_version**（§ 3.19）。
 
 ### 3.13 StablePrefix 纯净性 lint
 
@@ -1125,18 +1124,7 @@ pub struct XmlRenderer;
 ```
 
 - `BuildCx::renderer` 由调用方根据目标 model 选择
-- 阶段 1 byte-equal 双轨强制使用 `MarkdownRenderer`
-- 阶段 5 之后允许灰度 `XmlRenderer`，但**必须**与 cache_purity / 快照测试套件对齐
 - renderer 名字进入 `SectionAudit.renderer` 字段，事故复盘可见
-
-**灰度切换路径**：
-
-`SectionRenderer` 是**全局影响**的开关——切换会让 system prompt 字面 100% 改变，prefix cache 全量失效。因此切换不能简单 PR 合并即生效，必须遵循：
-
-2. **新 renderer 实现先并行存在**：以 `RendererCandidate { name, instance, enabled_models: HashSet<ModelTarget> }` 注册到 `RendererRegistry`，不替换默认
-3. **per-model 灰度**：`BuildCx::renderer` 由调用方根据 `ModelTarget` 选取——同进程不同模型可使用不同 renderer，互不影响 cache
-5. **schema_version bump**：每次默认 renderer 变更必须 bump `registry.schema_version`（§ 3.19 表格已列出此规则），方便事故复盘按 schema_version 切片
-6. **回退**：旧 renderer 至少保留两个发版周期（约 4 周）才允许移除；环境变量 `PROMPT_RENDERER_FORCE = "markdown"` 提供应急回退
 
 ### 3.16 Surface 扩展点：闭包枚举 + 单点新增
 
@@ -1317,7 +1305,7 @@ pub const SUBAGENT_INHERITED_SECTIONS: &[(SubagentSurfaceKind, &[SectionId])] = 
 
 ---
 
-## 四、迁移步骤（增量、可灰度）
+## 四、迁移步骤（增量）
 
 ### 阶段 0：脚手架（不改语义）
 
@@ -1327,7 +1315,7 @@ pub const SUBAGENT_INHERITED_SECTIONS: &[(SubagentSurfaceKind, &[SectionId])] = 
 4. 新增 `SectionSource` trait 与适配器 `LegacyProviderAdapter`，把现有 5 个 `*Provider` 包成 `SectionSource`，但仍允许旧路径并存
 5. 上线启动期 lint 测试套件（一次性补齐，避免后续阶段受 lint 阻塞）：`anchors_*`、`templates_*`、`surface_extensions_complete`、`error_codes_registered`、`schema_version_monotonic`、`subagent_inheritance_complete`、`signal_cycle_detected`
 
-### 阶段 1：装配器双轨（主代理 byte-equal 切换）
+### 阶段 1：装配器切换（主代理 byte-equal 切换）
 
 1. 实现 `Composer::build_main_agent_legacy_compat()`，输出**与现状 byte-equal**（含 phase / order_in_phase 的兼容映射）
 2. 加入快照测试：`assert_eq!(legacy_build_system_prompt(...), composer.build_main_agent_legacy_compat(...))`，覆盖：
@@ -1370,16 +1358,6 @@ pub const SUBAGENT_INHERITED_SECTIONS: &[(SubagentSurfaceKind, &[SectionId])] = 
 3. `build_implementation_handoff_prompt` **不直接走 Composer**（它是 user message 构造器），但其中复制的"响应风格 / 响应语言"段落改为通过 `Composer::render_section_only(SectionId::ProfileInstructions, …)` 单段渲染拼接，消除重复源
 4. 删除重复的 `response_language` / `response_style` 拼接逻辑——统一在 `ProfileInstructionsSource` 内
 
-### 阶段 7：可观测、灰度与告警
-
-1. 接通 `tracing` 与现有 metrics 通道；为 PromptComposer 添加 dashboards 字段
-3. 上线核心告警阈值：
-   - `prompt.budget.evicted_ratio > 0.5%` → P2
-   - `prompt.budget.truncated_ratio > 1%` → P2
-   - `prompt.cache_purity_violations > 0`（CI 拦截）→ P0
-   - `prompt.source.timeout{…} > 0.1%` → P2（§ 3.6.1 单 Source 超时）
-   - `prompt.cache_marker.over_request > 0` → P2（§ 3.7.1 消息层超额申请）
-
 ---
 
 ## 五、目录结构（重构后）
@@ -1403,7 +1381,7 @@ src-tauri/src/core/prompt/
 ├── runtime_message.rs         # RuntimeMessageInjector + CompactionPolicy + CurrentDateInjector
 ├── error_codes.rs             # SoftFailed.code 常量集中注册（§ 3.18）
 ├── redactor.rs                # PII 脱敏（tracing 字段 + warning 落库前过滤）
-├── renderer.rs                # SectionRenderer + Markdown/Xml + RendererRegistry（§ 3.14 灰度切换）
+├── renderer.rs                # SectionRenderer + Markdown/Xml + RendererRegistry
 ├── inheritance.rs             # SUBAGENT_INHERITED_SECTIONS + lint（§ 3.22）
 ├── sources/
 │   ├── mod.rs
@@ -1558,7 +1536,7 @@ registry.register(SectionSpec {
 | 风险 | 缓解 |
 |---|---|
 | 文案语义在迁移过程中出现微小漂移 | 阶段 1 强制主代理 byte-equal；子代理通过 `SUBAGENT_INHERITED_SECTIONS` lint 守底 |
-| Layer 划分错误导致缓存命中率下降 | `cache_purity` 测试 + 上线灰度 5% → 50% → 100%；监控 prompt 字节哈希集合大小 |
+| Layer 划分错误导致缓存命中率下降 | `cache_purity` 测试 + 监控 prompt 字节哈希集合大小 |
 | 子代理继承遗漏导致行为退化 | 子代理 `.snap` 全量比对 + `subagent_inheritance_complete` lint；首批仅切换 `SubagentExplore`，验证一周再切 `Review` / `Custom` |
 | 软失败掩盖真问题 | `tracing::warn!` + 计数器；超阈值告警 |
 | 模板加载错误（路径错） | `include_str!` 编译期失败，零运行时风险；dev 模式热重载失败回退到编译期常量 |

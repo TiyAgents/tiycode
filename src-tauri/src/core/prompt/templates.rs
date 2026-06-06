@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+#[cfg(debug_assertions)]
 use std::path::PathBuf;
 
 /// Template variables for placeholder substitution.
@@ -96,11 +97,11 @@ pub struct Template {
 
 /// Load a template file. In debug builds, reads from disk for hot-reload;
 /// otherwise uses the compile-time embedded string.
-pub fn load_template(rel_path: &str, embedded: &'static str) -> Cow<'static, str> {
+pub fn load_template(_rel_path: &str, embedded: &'static str) -> Cow<'static, str> {
     #[cfg(debug_assertions)]
     {
         let template_root = template_root();
-        let path = template_root.join(rel_path);
+        let path = template_root.join(_rel_path);
         if let Ok(s) = std::fs::read_to_string(&path) {
             return Cow::Owned(s);
         }
@@ -219,6 +220,7 @@ pub fn parse_front_matter(raw: &str) -> Result<(Template, String), TemplateError
     ))
 }
 
+#[cfg(debug_assertions)]
 fn template_root() -> PathBuf {
     // In dev, templates are relative to the prompt module directory
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
