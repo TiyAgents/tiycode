@@ -84,8 +84,12 @@ mod tests {
         });
     }
 
-    /// Replace host-dependent values with stable placeholders.
+    /// Replace host-dependent values with stable placeholders and strip the
+    /// Skills section — the skills listing depends on locally-installed files
+    /// that may not exist on CI or other developer machines.
     fn normalize_snapshot_text(text: &str) -> String {
+        let mut text = strip_skills_section(text);
+
         let home = dirs::home_dir()
             .and_then(|p| p.to_str().map(String::from))
             .unwrap_or_else(|| "/home/runner".to_string());
@@ -102,6 +106,22 @@ mod tests {
             .replace(os, "[os]")
             .replace(arch, "[arch]")
             .replace(&shell, "[shell]")
+    }
+
+    /// Remove the `## Skills` section — its content depends on locally-
+    /// installed skill files that vary across machines and CI runners.
+    fn strip_skills_section(text: &str) -> String {
+        let skills_header = "## Skills\n";
+        if let Some(skills_start) = text.find(skills_header) {
+            let before = &text[..skills_start];
+            let after_skills = &text[skills_start + skills_header.len()..];
+            // Find the next section header (starts with "\n## " after Skills).
+            if let Some(next_section) = after_skills.find("\n## ") {
+                let after = &after_skills[next_section..];
+                return format!("{}{}", before, after);
+            }
+        }
+        text.to_string()
     }
 
     /// Format the ComposedPrompt into a human-readable snapshot string.
