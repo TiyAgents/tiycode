@@ -23,7 +23,7 @@ pub enum CacheMarker {
 
 /// Global cache marker arbiter for a single LLM request.
 /// Enforces the ≤4 breakpoint limit across system prompt + messages.
-pub trait CacheMarkerArbiter: Send + Sync {
+pub trait CacheMarkerArbiter: Send + Sync + std::fmt::Debug {
     /// Called by Composer after rendering: records system prompt markers.
     fn record_system_markers(&self, markers: &[CacheMarkerSlot]);
 
@@ -43,6 +43,7 @@ pub struct CacheMarkerSlot {
 }
 
 /// Standard implementation that enforces total ≤ 4 markers.
+#[derive(Debug)]
 pub struct DefaultCacheMarkerArbiter {
     max_total: usize,
     system_markers: std::sync::Mutex<Vec<CacheMarkerSlot>>,

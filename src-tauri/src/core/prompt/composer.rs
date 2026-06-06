@@ -7,7 +7,7 @@ use crate::model::errors::AppError;
 
 use super::budget::PromptBudget;
 use super::build_context::BuildCx;
-use super::cache_marker::{CacheMarker, PromptBlock};
+use super::cache_marker::{CacheMarker, CacheMarkerArbiter, CacheMarkerSlot, PromptBlock};
 use super::exec_policy::SourceExecPolicy;
 use super::layer::{PromptLayer, SectionAudit, SectionWarning};
 use super::redactor::Redactor;
@@ -30,6 +30,9 @@ pub struct ComposedPrompt {
     pub audit: Vec<SectionAudit>,
     /// Warnings collected during composition
     pub warnings: Vec<SectionWarning>,
+    /// Cache marker arbiter used during this build, if any.
+    /// Available for the message layer to allocate remaining marker quota.
+    pub cache_arbiter: Option<Arc<dyn CacheMarkerArbiter>>,
 }
 
 /// The prompt composer: orchestrates section building, layer assignment,
@@ -39,6 +42,9 @@ pub struct Composer {
     exec_policy: SourceExecPolicy,
     redactor: Arc<dyn Redactor>,
     tokenizer: Arc<dyn Tokenizer>,
+    /// Cache marker arbiter for coordinating system <-> message layer quota.
+    /// When set, the Composer records marker slots after `assign_cache_markers`.
+    cache_arbiter: Option<Arc<dyn CacheMarkerArbiter>>,
 }
 
 impl Composer {
@@ -52,11 +58,20 @@ impl Composer {
             exec_policy,
             redactor,
             tokenizer: Arc::new(HeuristicTokenizer),
+            cache_arbiter: None,
         }
     }
 
     pub fn with_tokenizer(mut self, tokenizer: Arc<dyn Tokenizer>) -> Self {
         self.tokenizer = tokenizer;
+        self
+    }
+
+    /// Attach a cache marker arbiter for system ↔ message layer coordination.
+    /// The arbiter records marker slots after `assign_cache_markers` and is
+    /// exposed in `ComposedPrompt::cache_arbiter` for the message layer.
+    pub fn with_cache_arbiter(mut self, arbiter: Arc<dyn CacheMarkerArbiter>) -> Self {
+        self.cache_arbiter = Some(arbiter);
         self
     }
 
@@ -213,6 +228,26 @@ impl Composer {
         // non-empty layers, skipping Ephemeral layer.
         Self::assign_cache_markers(&mut blocks, &cx.target_model);
 
+        // Record marker slots via the arbiter so the message layer can coordinate
+        // quota (≤4 Anthropic breakpoints across system prompt + runtime messages).
+        if let Some(ref arbiter) = self.cache_arbiter {
+            let mut byte_offset = 0usize;
+            let slots: Vec<CacheMarkerSlot> = blocks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, b)| {
+                    let offset = byte_offset;
+                    byte_offset += b.text.len();
+                    b.cache_marker.as_ref().map(|_| CacheMarkerSlot {
+                        layer: b.layer,
+                        byte_offset_in_text: offset,
+                        block_index: i,
+                    })
+                })
+                .collect();
+            arbiter.record_system_markers(&slots);
+        }
+
         let text = text_parts.join(renderer.layer_separator());
         let text = self.redactor.redact(&text).into_owned();
 
@@ -238,6 +273,7 @@ impl Composer {
             schema_version: self.registry.schema_version(),
             audit,
             warnings,
+            cache_arbiter: self.cache_arbiter.clone(),
         })
     }
 

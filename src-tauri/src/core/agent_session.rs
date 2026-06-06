@@ -1499,10 +1499,11 @@ async fn build_system_prompt(
         helper_profile: None,
         custom_subagent_slug: None,
         response_language: None,
-        // supports_cache_control=false until the LLM adapter wires PromptBlock cache markers.
+        // Cache markers enabled: Composer places Ephemeral markers at StablePrefix
+        // and SessionStable layer boundaries for Anthropic prompt-prefix caching.
         target_model: ModelTarget::AnthropicClaude {
             context_window: 200_000,
-            supports_cache_control: false,
+            supports_cache_control: true,
         },
         clock: Arc::new(SystemClock),
         signals: Arc::new(crate::core::prompt::SignalCache::new()),
@@ -1510,7 +1511,7 @@ async fn build_system_prompt(
     };
 
     let surface = PromptSurface::MainAgent { run_mode: rm };
-    let budget = PromptBudget::default();
+    let budget = PromptBudget::for_model(200_000, &surface);
     let composed = composer.build(&surface, &cx, &budget).await?;
     Ok(composed.text)
 }

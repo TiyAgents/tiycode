@@ -899,14 +899,14 @@ async fn build_helper_system_prompt(
         response_language: None,
         target_model: ModelTarget::AnthropicClaude {
             context_window: 200_000,
-            supports_cache_control: false,
+            supports_cache_control: true,
         },
         clock: Arc::new(SystemClock),
         signals: Arc::new(crate::core::prompt::SignalCache::new()),
         renderer: Arc::new(MarkdownRenderer),
     };
 
-    let budget = PromptBudget::default();
+    let budget = PromptBudget::for_model(200_000, &surface);
     let composed = composer.build(&surface, &cx, &budget).await?;
 
     // Phase 7: Subagent body (identity + persona + shell tooling guide)
