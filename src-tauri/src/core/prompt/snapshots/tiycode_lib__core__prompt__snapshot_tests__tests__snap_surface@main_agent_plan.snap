@@ -95,7 +95,7 @@ For conclusion-oriented replies, choose a structure that matches the task instea
 - Approval policy: require_for_mutations.
 - Read-only tools are generally auto-allowed; mutating tools may require approval.
 - Default mode is active, so tool use follows the configured approval policy.
-- Additional writable roots: `[HOME]/.agents`, `[HOME]/.tiy`, `[HOME]/.cache`, `/tmp`, `[TMPDIR]`. File tools (read, write, edit, list, find, search) can operate on files under these paths in addition to the workspace.
+- Additional writable roots: `[HOME]/.agents`, `[HOME]/.tiy`, `[HOME]/.cache`, `/tmp`. File tools (read, write, edit, list, find, search) can operate on files under these paths in addition to the workspace.
 - Outer host sandbox metadata is not exposed here; rely on these effective runtime constraints.
 
 ## Run Mode
@@ -114,12 +114,11 @@ Workspace path: /tiycode-snap-workspace
 
 === AUDIT ===
 schema_version: 3
-id=Role layer=StablePrefix version=1 bytes=[snap] tokens=70 truncated=false renderer=markdown
-id=BehavioralGuidelines layer=StablePrefix version=1 bytes=[snap] tokens=1841 truncated=false renderer=markdown
-id=FinalResponseStructure layer=StablePrefix version=1 bytes=[snap] tokens=661 truncated=false renderer=markdown
-id=ShellToolingGuide layer=SessionStable version=1 bytes=[snap] tokens=255 truncated=false renderer=markdown
-id=Skills layer=SessionStable version=1 bytes=[snap] tokens=2441 truncated=false renderer=markdown
-id=SystemEnvironment layer=RuntimeOverlay version=1 bytes=[snap] tokens=24 truncated=false renderer=markdown
-id=SandboxPermissions layer=RuntimeOverlay version=1 bytes=[snap] tokens=200 truncated=false renderer=markdown
-id=RunMode layer=RuntimeOverlay version=1 bytes=[snap] tokens=326 truncated=false renderer=markdown
-id=WorkspaceLocation layer=RuntimeOverlay version=1 bytes=[snap] tokens=14 truncated=false renderer=markdown
+id=Role layer=StablePrefix version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=BehavioralGuidelines layer=StablePrefix version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=FinalResponseStructure layer=StablePrefix version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=ShellToolingGuide layer=SessionStable version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=SystemEnvironment layer=RuntimeOverlay version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=SandboxPermissions layer=RuntimeOverlay version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=RunMode layer=RuntimeOverlay version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=WorkspaceLocation layer=RuntimeOverlay version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown

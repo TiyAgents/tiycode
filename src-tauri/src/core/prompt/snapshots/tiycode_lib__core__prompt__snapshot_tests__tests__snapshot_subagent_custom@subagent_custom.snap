@@ -25,7 +25,7 @@ Workspace path: /tiycode-snap-workspace
 
 === AUDIT ===
 schema_version: 3
-id=Role layer=StablePrefix version=1 bytes=[snap] tokens=70 truncated=false renderer=markdown
-id=ShellToolingGuide layer=SessionStable version=1 bytes=[snap] tokens=255 truncated=false renderer=markdown
-id=SystemEnvironment layer=RuntimeOverlay version=1 bytes=[snap] tokens=24 truncated=false renderer=markdown
-id=WorkspaceLocation layer=RuntimeOverlay version=1 bytes=[snap] tokens=14 truncated=false renderer=markdown
+id=Role layer=StablePrefix version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=ShellToolingGuide layer=SessionStable version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=SystemEnvironment layer=RuntimeOverlay version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
+id=WorkspaceLocation layer=RuntimeOverlay version=1 bytes=[snap] tokens=[snap] truncated=false renderer=markdown
