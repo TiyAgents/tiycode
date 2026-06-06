@@ -30,7 +30,9 @@ pub mod templates;
 // ── Core re-exports ──────────────────────────────────────────────
 pub use budget::PromptBudget;
 pub use build_context::{BuildCx, ModelTarget};
-pub use cache_marker::{CacheMarker, CacheMarkerArbiter, CacheMarkerSlot, DefaultCacheMarkerArbiter, PromptBlock};
+pub use cache_marker::{
+    CacheMarker, CacheMarkerArbiter, CacheMarkerSlot, DefaultCacheMarkerArbiter, PromptBlock,
+};
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use composer::{ComposedPrompt, Composer};
 pub use error_codes::codes;

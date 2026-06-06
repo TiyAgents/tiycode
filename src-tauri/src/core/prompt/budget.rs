@@ -156,7 +156,9 @@ mod tests {
             Some(&30_000) // total_chars / 8
         );
         assert_eq!(
-            budget.per_section_overrides.get(&SectionId::CustomSubagentBody),
+            budget
+                .per_section_overrides
+                .get(&SectionId::CustomSubagentBody),
             Some(&60_000) // total_chars / 4
         );
     }

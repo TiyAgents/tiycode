@@ -1479,9 +1479,8 @@ async fn build_system_prompt(
     thread_id: &str,
 ) -> Result<crate::core::prompt::ComposedPrompt, AppError> {
     use crate::core::prompt::{
-        BuildCx, Composer, DefaultCacheMarkerArbiter, MarkdownRenderer,
-        ModelTarget, NoopRedactor, PromptBudget, PromptSurface, RunMode, SourceExecPolicy,
-        SystemClock,
+        BuildCx, Composer, DefaultCacheMarkerArbiter, MarkdownRenderer, ModelTarget, NoopRedactor,
+        PromptBudget, PromptSurface, RunMode, SourceExecPolicy, SystemClock,
     };
     use std::sync::Arc;
 

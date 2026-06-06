@@ -856,9 +856,8 @@ async fn build_helper_system_prompt(
     helper_profile: &SubagentProfile,
 ) -> Result<crate::core::prompt::ComposedPrompt, AppError> {
     use crate::core::prompt::{
-        BuildCx, Composer, DefaultCacheMarkerArbiter, MarkdownRenderer,
-        ModelTarget, NoopRedactor, PromptBudget, PromptSurface, RunMode, SourceExecPolicy,
-        SystemClock,
+        BuildCx, Composer, DefaultCacheMarkerArbiter, MarkdownRenderer, ModelTarget, NoopRedactor,
+        PromptBudget, PromptSurface, RunMode, SourceExecPolicy, SystemClock,
     };
     use std::sync::Arc;
 
