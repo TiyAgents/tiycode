@@ -38,7 +38,8 @@ mod tests {
         let pool = init_database(&db_path).await.expect("init db");
 
         // Use a fixed workspace path to keep snapshots deterministic.
-        let workspace: &'static str = "/tmp/tiycode-snapshot-workspace";
+        // Avoid /tmp prefix so normalisation doesn't collide with TMPDIR.
+        let workspace: &'static str = "/tiycode-snap-workspace";
 
         let registry = Arc::new(default_registry());
         let composer = Composer::new(
@@ -104,6 +105,9 @@ mod tests {
     }
 
     /// Format the ComposedPrompt into a human-readable snapshot string.
+    /// Audit `bytes` are replaced with `[snap]` because the same
+    /// prompt text can have different byte counts on different platforms
+    /// (e.g. "aarch64" → 7 bytes on macOS, "x86_64" → 6 bytes on Linux).
     fn format_audit_snapshot(composed: &ComposedPrompt) -> String {
         let mut out = String::new();
         out.push_str("=== COMPOSED PROMPT TEXT ===\n");
@@ -112,11 +116,10 @@ mod tests {
         out.push_str(&format!("schema_version: {}\n", composed.schema_version));
         for entry in &composed.audit {
             out.push_str(&format!(
-                "id={:?} layer={:?} version={} bytes={} tokens={} truncated={} renderer={}\n",
+                "id={:?} layer={:?} version={} bytes=[snap] tokens={} truncated={} renderer={}\n",
                 entry.id,
                 entry.layer,
                 entry.version,
-                entry.bytes,
                 entry.estimated_tokens,
                 entry.truncated,
                 entry.renderer,
@@ -184,7 +187,8 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let db_path = temp_dir.path().join("snap.db");
         let pool = init_database(&db_path).await.expect("init db");
-        let workspace: &'static str = "/tmp/tiycode-snapshot-workspace";
+        // Avoid /tmp prefix so normalisation doesn't collide with TMPDIR.
+        let workspace: &'static str = "/tiycode-snap-workspace";
 
         let registry = Arc::new(default_registry());
         let composer = Composer::new(

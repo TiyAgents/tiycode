@@ -128,7 +128,7 @@ A skill is a set of local instructions to follow that is stored in a `SKILL.md` 
 
 ## Sandbox & Permissions
 - Effective runtime sandbox: workspace-scoped tool execution with policy checks.
-- Workspace boundary: file and path-aware tools are restricted to the current workspace (`/tmp/tiycode-snapshot-workspace`).
+- Workspace boundary: file and path-aware tools are restricted to the current workspace (`/tiycode-snap-workspace`).
 - Approval policy: require_for_mutations.
 - Read-only tools are generally auto-allowed; mutating tools may require approval.
 - Default mode is active, so tool use follows the configured approval policy.
@@ -147,16 +147,16 @@ Default execution mode is active.
 - Prefer the smallest sufficient action that moves the task forward.
 
 ## Runtime Context
-Workspace path: /tmp/tiycode-snapshot-workspace
+Workspace path: /tiycode-snap-workspace
 
 === AUDIT ===
 schema_version: 3
-id=Role layer=StablePrefix version=1 bytes=272 tokens=70 truncated=false renderer=markdown
-id=BehavioralGuidelines layer=StablePrefix version=1 bytes=7347 tokens=1841 truncated=false renderer=markdown
-id=FinalResponseStructure layer=StablePrefix version=1 bytes=2636 tokens=661 truncated=false renderer=markdown
-id=ShellToolingGuide layer=SessionStable version=1 bytes=997 tokens=255 truncated=false renderer=markdown
-id=Skills layer=SessionStable version=1 bytes=9944 tokens=2441 truncated=false renderer=markdown
-id=SystemEnvironment layer=RuntimeOverlay version=1 bytes=75 tokens=24 truncated=false renderer=markdown
-id=SandboxPermissions layer=RuntimeOverlay version=1 bytes=784 tokens=202 truncated=false renderer=markdown
-id=RunMode layer=RuntimeOverlay version=1 bytes=1295 tokens=326 truncated=false renderer=markdown
-id=WorkspaceLocation layer=RuntimeOverlay version=1 bytes=47 tokens=16 truncated=false renderer=markdown
+id=Role layer=StablePrefix version=1 bytes=[snap] tokens=70 truncated=false renderer=markdown
+id=BehavioralGuidelines layer=StablePrefix version=1 bytes=[snap] tokens=1841 truncated=false renderer=markdown
+id=FinalResponseStructure layer=StablePrefix version=1 bytes=[snap] tokens=661 truncated=false renderer=markdown
+id=ShellToolingGuide layer=SessionStable version=1 bytes=[snap] tokens=255 truncated=false renderer=markdown
+id=Skills layer=SessionStable version=1 bytes=[snap] tokens=2441 truncated=false renderer=markdown
+id=SystemEnvironment layer=RuntimeOverlay version=1 bytes=[snap] tokens=24 truncated=false renderer=markdown
+id=SandboxPermissions layer=RuntimeOverlay version=1 bytes=[snap] tokens=200 truncated=false renderer=markdown
+id=RunMode layer=RuntimeOverlay version=1 bytes=[snap] tokens=326 truncated=false renderer=markdown
+id=WorkspaceLocation layer=RuntimeOverlay version=1 bytes=[snap] tokens=14 truncated=false renderer=markdown

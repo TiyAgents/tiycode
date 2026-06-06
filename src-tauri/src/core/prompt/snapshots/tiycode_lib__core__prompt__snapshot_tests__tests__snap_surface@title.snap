@@ -8,4 +8,4 @@ You write concise conversation titles. Return only the title text.
 
 === AUDIT ===
 schema_version: 3
-id=TitleContract layer=StablePrefix version=1 bytes=66 tokens=21 truncated=false renderer=markdown
+id=TitleContract layer=StablePrefix version=1 bytes=[snap] tokens=21 truncated=false renderer=markdown
