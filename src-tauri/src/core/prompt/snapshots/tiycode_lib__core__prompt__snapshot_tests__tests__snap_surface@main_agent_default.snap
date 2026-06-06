@@ -83,7 +83,6 @@ For conclusion-oriented replies, choose a structure that matches the task instea
 - Do not assume any particular CLI tool (for example `node`, `python`, `pip`, `git`, or `rg`) is available on the user's machine. Verify availability with a quick probe (such as `command -v <tool>`) before proposing a shell command that depends on it, or prefer the workspace-aware tools when they can accomplish the task.
 - When `rg` is unavailable, fall back to the built-in `search` and `find` tools before broad shell scans.
 
-
 ## System Environment
 - Operating system: [os]
 - Architecture: [arch]

@@ -129,7 +129,13 @@ mod tests {
             let after_skills = &text[skills_start + skills_header.len()..];
             // Find the next section header (starts with "\n## " after Skills).
             if let Some(next_section) = after_skills.find("\n## ") {
-                let after = &after_skills[next_section..];
+                // Skip the leading '\n' of the matched "\n## " so the result
+                // joins `before` (which already ends with the "\n\n" layer
+                // separator) directly to the next section header. This yields
+                // exactly one blank line between sections, matching the output
+                // on machines where the Skills section is absent entirely
+                // (e.g. CI runners with no installed skills).
+                let after = &after_skills[next_section + 1..];
                 return format!("{}{}", before, after);
             }
         }
