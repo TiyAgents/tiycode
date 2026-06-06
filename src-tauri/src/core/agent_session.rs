@@ -566,8 +566,10 @@ pub async fn build_session_spec(
         run_repo::find_latest_with_prompt_usage_by_thread_excluding_run(pool, thread_id, run_id)
             .await?;
 
-    let system_prompt = build_system_prompt(pool, &raw_plan, workspace_path, run_mode).await?;
-    let system_prompt = inject_goal_context(pool, thread_id, system_prompt).await?;
+    let composed_prompt =
+        build_system_prompt(pool, &raw_plan, workspace_path, run_mode, thread_id).await?;
+    let system_prompt = composed_prompt.text.clone();
+    let cache_arbiter = composed_prompt.cache_arbiter;
     let extension_tools = ExtensionsManager::new(pool.clone())
         .list_runtime_agent_tools(Some(workspace_path))
         .await?;
@@ -627,6 +629,7 @@ pub async fn build_session_spec(
         model_plan: resolved_plan,
         initial_prompt: None,
         initial_context_calibration,
+        cache_arbiter,
     })
 }
 
@@ -941,7 +944,11 @@ impl AgentSession {
         });
 
         let result = if let Some(prompt) = self.spec.initial_prompt.clone() {
-            self.agent.prompt(prompt).await
+            // Phase 3: prepend RuntimeMessage (current_date) before the user's
+            // turn so the LLM sees the wall-clock date without breaking the
+            // system prompt's prefix cache. § 3.7 RuntimeMessagePlacement::BeforeLatestUser.
+            let prompt_with_runtime = inject_runtime_context(&prompt).await;
+            self.agent.prompt(prompt_with_runtime).await
         } else {
             self.agent.continue_().await
         };
@@ -1407,50 +1414,111 @@ pub async fn resolve_runtime_model_role(
     })
 }
 
+/// Build a runtime-context block (current date / timestamp) and prepend it to
+/// the user prompt. Implements § 3.7 RuntimeMessagePlacement::BeforeLatestUser
+/// at the message-content level — keeping the system prompt prefix-cache stable.
+///
+/// **Implicit dedup / PinOutsideWindow**:
+///
+/// The runtime block is **never persisted to the messages table** —
+/// `agent_run_manager.rs::start_run` writes `display_prompt` (or the raw user
+/// prompt), not the wrapped string we hand to `agent.prompt(...)`. Consequences:
+///
+/// 1. Each turn starts with a clean user prompt and is wrapped fresh — no need
+///    for an explicit `dedup_id` lookup; the previous turn's runtime context is
+///    not in the DB to be deduped.
+/// 2. The compaction summary input (`build_compact_summary_messages`) reads
+///    from `messages` and therefore sees no `<runtime_context>` blocks —
+///    equivalent to `CompactionPolicy::PinOutsideWindow` at the storage layer
+///    without an extra column.
+/// 3. The wall-clock date enters the LLM context only via this prepend; if
+///    a feature later needs server-authoritative time across the full message
+///    history, a `compaction_pinned` column on `messages` would be required.
+pub(crate) async fn inject_runtime_context(user_prompt: &str) -> String {
+    use crate::core::prompt::{CurrentDateInjector, RuntimeMessageInjector, SystemClock};
+    use std::sync::Arc;
+
+    // The CurrentDateInjector source is fixed; only Surface gates apply.
+    // We construct a minimal BuildCx to satisfy the trait signature.
+    let injector = CurrentDateInjector::new(Arc::new(SystemClock));
+    // Build a dummy BuildCx — CurrentDateInjector doesn't read it.
+    let placeholder_pool = match sqlx::SqlitePool::connect_lazy("sqlite::memory:") {
+        Ok(p) => p,
+        Err(_) => return user_prompt.to_string(),
+    };
+    let cx = crate::core::prompt::BuildCx {
+        pool: &placeholder_pool,
+        workspace_path: "",
+        thread_id: None,
+        run_id: None,
+        raw_plan: None,
+        run_mode: crate::core::prompt::RunMode::Default,
+        helper_profile: None,
+        custom_subagent_slug: None,
+        response_language: None,
+        target_model: crate::core::prompt::ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: false,
+        },
+        clock: Arc::new(SystemClock),
+        signals: Arc::new(crate::core::prompt::SignalCache::new()),
+        renderer: Arc::new(crate::core::prompt::MarkdownRenderer),
+    };
+
+    match injector.build_message(&cx).await {
+        Some(msg) => format!("{}\n\n{}", msg.text, user_prompt),
+        None => user_prompt.to_string(),
+    }
+}
+
 async fn build_system_prompt(
     pool: &SqlitePool,
     raw_plan: &RuntimeModelPlan,
     workspace_path: &str,
     run_mode: &str,
-) -> Result<String, AppError> {
-    prompt::build_system_prompt(pool, raw_plan, workspace_path, run_mode).await
-}
-
-/// Inject goal context into the system prompt if an active goal exists for the thread.
-async fn inject_goal_context(
-    pool: &SqlitePool,
     thread_id: &str,
-    mut system_prompt: String,
-) -> Result<String, AppError> {
-    let goal = crate::persistence::repo::goal_repo::find_by_thread_id(pool, thread_id).await?;
-    if let Some(goal) = goal {
-        if goal.status == crate::model::goal::GoalStatus::Active {
-            let goal_block = format!(
-                "## Active Goal\n\n\
-                 **You have an active goal. This takes priority over other instructions.**\n\n\
-                 Objective: {objective}\n\
-                 Turns used: {turns_used}/{max_turns}\n\n\
-                 **Completion requirements — ALL must be met before calling goal_scored(complete):**\n\
-                 1. Every subtask implied by the objective is done. No remaining work, no dangling follow-ups.\n\
-                 2. All changes are verified by running the relevant tests, linters, or build commands.\n\
-                 3. Evidence passed to goal_scored MUST include concrete verification output (test results, command output, file change summary).\n\
-                 Do NOT mark the goal complete until these three conditions are fully satisfied.\n\n\
-                 Rules:\n\
-                 - When you confirm the goal is fully achieved, you MUST call goal_scored(status=\"complete\", evidence=\"...\", pledge=\"...\") to mark it as scored. This is the only way to mark the goal as achieved.\n\
-                 - The goal_scored tool requires a 'pledge' parameter. You MUST pass this exact text verbatim: \"I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output.\"\n\
-                 - Do NOT claim completion without verifiable evidence\n\
-                 - If blocked and need user input, use clarify tool\n\
-                 - The system will automatically continue this goal across turns",
-                objective = goal.objective,
-                turns_used = goal.turns_used,
-                max_turns = goal.max_turns,
-            );
-            // Prepend goal block right after the Role/Behavioral section
-            system_prompt.push_str("\n\n");
-            system_prompt.push_str(&goal_block);
-        }
-    }
-    Ok(system_prompt)
+) -> Result<crate::core::prompt::ComposedPrompt, AppError> {
+    use crate::core::prompt::{
+        BuildCx, Composer, DefaultCacheMarkerArbiter, MarkdownRenderer, ModelTarget, NoopRedactor,
+        PromptBudget, PromptSurface, RunMode, SourceExecPolicy, SystemClock,
+    };
+    use std::sync::Arc;
+
+    let rm = RunMode::from_str(run_mode);
+    let registry = Arc::new(prompt::registry::default_registry());
+    let arbiter = Arc::new(DefaultCacheMarkerArbiter::new(4));
+    let composer = Composer::new(
+        registry,
+        SourceExecPolicy::default(),
+        Arc::new(NoopRedactor),
+    )
+    .with_cache_arbiter(arbiter);
+
+    let cx = BuildCx {
+        pool,
+        workspace_path,
+        thread_id: Some(thread_id),
+        run_id: None,
+        raw_plan: Some(raw_plan),
+        run_mode: rm,
+        helper_profile: None,
+        custom_subagent_slug: None,
+        response_language: None,
+        // Cache markers enabled: Composer places Ephemeral markers at StablePrefix
+        // and SessionStable layer boundaries for Anthropic prompt-prefix caching.
+        target_model: ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: true,
+        },
+        clock: Arc::new(SystemClock),
+        signals: Arc::new(crate::core::prompt::SignalCache::new()),
+        renderer: Arc::new(MarkdownRenderer),
+    };
+
+    let surface = PromptSurface::MainAgent { run_mode: rm };
+    let budget = PromptBudget::for_model(&cx.target_model, &surface);
+    let composed = composer.build(&surface, &cx, &budget).await?;
+    Ok(composed)
 }
 
 /// Security config for the **main** agent.  Uses a very large tool timeout so

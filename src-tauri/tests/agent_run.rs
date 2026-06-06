@@ -448,12 +448,12 @@ async fn test_build_session_spec_resolves_primary_model_and_profile_prompt() {
         .system_prompt
         .contains("Always answer in concise engineering prose."));
     assert!(spec.system_prompt.contains("Use agent_explore"));
+    assert!(spec.system_prompt.contains(
+        "Use update_plan to publish the implementation plan once the intended change is clear"
+    ));
     assert!(spec
         .system_prompt
-        .contains("Use update_plan to publish the current implementation plan"));
-    assert!(spec
-        .system_prompt
-        .contains("Do not use update_plan for pure analysis"));
+        .contains("Do not use it for pure analysis"));
     assert_eq!(spec.history_messages.len(), 1);
 }
 
@@ -805,7 +805,9 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
     assert!(spec.system_prompt.contains(
         "Before taking tool actions or making substantive changes, send a brief, friendly reply"
     ));
-    assert!(spec.system_prompt.contains("Read files before editing."));
+    assert!(spec.system_prompt.contains(
+        "Read files before editing, and understand existing code before making changes."
+    ));
     assert!(spec.system_prompt.contains("Use `read` to inspect files"));
     assert!(spec
         .system_prompt
@@ -821,28 +823,21 @@ async fn test_build_session_spec_includes_structured_runtime_context_sections() 
         .contains("terminal panel tools only for their dedicated session workflow"));
     assert!(spec
         .system_prompt
-        .contains("Flag risks, destructive operations, or ambiguity before acting."));
+        .contains("Flag risks, destructive operations, or ambiguity before acting, and ask when intent is unclear."));
     assert!(spec
         .system_prompt
-        .contains("Do not rerun the same verification commands yourself unless the helper explicitly could not run them"));
-    assert!(spec.system_prompt.contains("When the user's goal is clear"));
-    assert!(spec
-        .system_prompt
-        .contains("low-risk, local, and reversible"));
-    assert!(spec
-        .system_prompt
-        .contains("move forward without unnecessary clarification"));
+        .contains("Do not rerun the same commands yourself unless the helper could not run them"));
     assert!(spec
         .system_prompt
         .contains("Do not use clarify to offload work"));
-    assert!(spec
-        .system_prompt
-        .contains("Use update_plan before implementation"));
+    assert!(spec.system_prompt.contains(
+        "Use update_plan to publish the implementation plan once the intended change is clear"
+    ));
     assert!(spec.system_prompt.contains("complex, cross-file, or risky"));
     assert!(spec
         .system_prompt
         .contains("scope decision is still unresolved"));
-    assert!(spec.system_prompt.contains("before publishing update_plan"));
+    assert!(spec.system_prompt.contains("before publishing a plan"));
     assert!(spec.system_prompt.contains("## System Environment"));
     assert!(spec.system_prompt.contains("## Sandbox & Permissions"));
     assert!(spec.system_prompt.contains("Approval policy: require_all."));

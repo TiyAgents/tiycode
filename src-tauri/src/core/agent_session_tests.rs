@@ -34,9 +34,7 @@ pub(super) mod tests {
     use crate::core::plan_checkpoint::{
         build_plan_artifact_from_tool_input, build_plan_message_metadata,
     };
-    use crate::core::prompt::providers::{
-        final_response_structure_system_instruction, run_mode_prompt_body,
-    };
+    use crate::core::prompt::templates::strip_front_matter;
     use crate::core::subagent::{
         HelperAgentOrchestrator, RuntimeOrchestrationTool, SubagentProfile,
     };
@@ -48,6 +46,24 @@ pub(super) mod tests {
     use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto, ToolCallDto};
     use crate::persistence::init_database;
     use crate::persistence::repo::provider_repo;
+
+    /// Load a final response structure template body for assertions.
+    fn final_response_structure_body() -> String {
+        strip_front_matter(include_str!("prompt/templates/final_response_structure.md")).to_string()
+    }
+
+    /// Load a run mode template body with term_panel_usage_note substituted.
+    fn run_mode_body(plan: bool) -> String {
+        let tpl = if plan {
+            include_str!("prompt/templates/run_mode.plan.md")
+        } else {
+            include_str!("prompt/templates/run_mode.default.md")
+        };
+        strip_front_matter(tpl).replace(
+            "{{term_panel_usage_note}}",
+            crate::core::subagent::TERM_PANEL_USAGE_NOTE,
+        )
+    }
 
     const TEST_CONTEXT_WINDOW: &str = "128000";
     const TEST_MODEL_DISPLAY_NAME: &str = "GPT Test";
@@ -307,6 +323,7 @@ pub(super) mod tests {
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
             initial_context_calibration: Default::default(),
+            cache_arbiter: None,
         };
 
         AgentSession::new(
@@ -381,6 +398,7 @@ pub(super) mod tests {
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
             initial_context_calibration: Default::default(),
+            cache_arbiter: None,
         };
         let session = AgentSession::new(
             pool,
@@ -856,7 +874,7 @@ pub(super) mod tests {
 
     #[test]
     fn final_response_structure_instruction_matches_task_types_and_markdown_hierarchy() {
-        let instruction = final_response_structure_system_instruction();
+        let instruction = final_response_structure_body();
 
         assert!(instruction.contains("at most two heading levels"));
         assert!(instruction.contains("avoid turning every sub-point into its own heading"));
@@ -872,7 +890,7 @@ pub(super) mod tests {
     fn final_response_structure_section_is_distinct_from_response_style_rules() {
         let section = format!(
             "## Final Response Structure\n{}",
-            final_response_structure_system_instruction()
+            final_response_structure_body()
         );
         let balanced = response_style_system_instruction(ProfileResponseStyle::Balanced);
 
@@ -884,8 +902,8 @@ pub(super) mod tests {
 
     #[test]
     fn run_mode_prompt_clarifies_terminal_panel_scope() {
-        let plan_prompt = run_mode_prompt_body("plan");
-        let default_prompt = run_mode_prompt_body("default");
+        let plan_prompt = run_mode_body(true);
+        let default_prompt = run_mode_body(false);
 
         assert!(plan_prompt.contains("embedded Terminal panel"));
         assert!(plan_prompt.contains("update_plan"));
@@ -967,15 +985,17 @@ pub(super) mod tests {
             &RuntimeModelPlan::default(),
             workspace_root.to_string_lossy().as_ref(),
             "default",
+            "test_thread",
         )
         .await
-        .expect("system prompt");
+        .expect("system prompt")
+        .text;
 
         assert!(prompt.contains(
-            "review helper is responsible for running the necessary type-check and test commands"
+            "the review helper runs the necessary type-check and test commands and returns the results"
         ));
         assert!(prompt.contains(
-            "Do not rerun the same verification commands yourself unless the helper explicitly could not run them"
+            "Do not rerun the same commands yourself unless the helper could not run them"
         ));
     }
 
@@ -1007,9 +1027,11 @@ Used for prompt assembly coverage.
             &RuntimeModelPlan::default(),
             workspace_root.to_string_lossy().as_ref(),
             "default",
+            "test_thread",
         )
         .await
-        .expect("system prompt");
+        .expect("system prompt")
+        .text;
 
         assert!(prompt.contains("## Skills"));
         assert!(prompt.contains("### Available skills"));
@@ -1048,13 +1070,14 @@ Used for prompt assembly coverage.
             &RuntimeModelPlan::default(),
             workspace_root.to_string_lossy().as_ref(),
             "default",
+            "test_thread",
         )
         .await
-        .expect("system prompt");
+        .expect("system prompt")
+        .text;
 
-        assert!(prompt.contains("call `query_task` first"));
         assert!(prompt.contains("call `query_task` with `scope='active'`"));
-        assert!(prompt.contains("Use `query_task` with `scope='all'` only"));
+        assert!(prompt.contains("use `scope='all'` only when you need history"));
     }
 
     #[test]
@@ -2511,7 +2534,7 @@ Used for prompt assembly coverage.
 
     #[test]
     fn plan_mode_prompt_mentions_waiting_for_approval_after_update_plan() {
-        let prompt = run_mode_prompt_body("plan");
+        let prompt = run_mode_body(true);
 
         assert!(prompt.contains("clarify"));
         assert!(prompt.contains("does NOT complete the run"));
@@ -2532,20 +2555,20 @@ Used for prompt assembly coverage.
 
     #[test]
     fn default_mode_prompt_mentions_clarify_for_missing_information() {
-        let prompt = run_mode_prompt_body("default");
+        let prompt = run_mode_body(false);
 
-        assert!(prompt.contains("Use clarify instead of guessing"));
-        assert!(prompt.contains("multiple reasonable approaches"));
-        assert!(prompt.contains("approve a risky action"));
+        assert!(prompt.contains("clarify first when an unresolved requirement blocks that plan"));
+        assert!(prompt.contains("follow the general guidelines above"));
     }
 
     #[test]
     fn default_mode_prompt_references_update_plan_quality_contract() {
-        let prompt = run_mode_prompt_body("default");
+        let prompt = run_mode_body(false);
 
-        assert!(prompt.contains("follow the quality contract"));
-        assert!(prompt.contains("update_plan tool description"));
-        assert!(prompt.contains("Explore the codebase first"));
+        assert!(prompt.contains(
+            "publish a plan with update_plan before implementation when the work is complex"
+        ));
+        assert!(prompt.contains("Prefer the smallest sufficient action"));
     }
 
     #[test]
@@ -4870,6 +4893,7 @@ Used for prompt assembly coverage.
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
             initial_context_calibration: Default::default(),
+            cache_arbiter: None,
         };
         let session = AgentSession::new(
             pool,
@@ -4944,6 +4968,7 @@ Used for prompt assembly coverage.
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
             initial_context_calibration: Default::default(),
+            cache_arbiter: None,
         };
         let session = AgentSession::new(
             pool,
@@ -5000,5 +5025,56 @@ Used for prompt assembly coverage.
             !first_still_pending,
             "first message must not remain Pending after cancel attempt"
         );
+    }
+
+    #[tokio::test]
+    async fn inject_runtime_context_prepends_current_date_block() {
+        use crate::core::agent_session::inject_runtime_context;
+
+        let original = "Help me refactor this function.";
+        let wrapped = inject_runtime_context(original).await;
+
+        assert!(
+            wrapped.contains("<runtime_context"),
+            "wrapped prompt must contain runtime_context tag: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("Current date:"),
+            "wrapped prompt must contain Current date: {wrapped}"
+        );
+        assert!(
+            wrapped.contains(original),
+            "wrapped prompt must preserve the original user prompt: {wrapped}"
+        );
+        // Section 3.7 BeforeLatestUser: the runtime block must precede the user prompt.
+        let runtime_idx = wrapped.find("<runtime_context").unwrap();
+        let prompt_idx = wrapped.find(original).unwrap();
+        assert!(
+            runtime_idx < prompt_idx,
+            "runtime context must come before the user prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn inject_runtime_context_dedups_implicitly_per_turn() {
+        // Two consecutive prompt-builds yield independent wrappers; the first
+        // wrapped output is NOT seen by the second, simulating per-turn dedup
+        // (§ 3.7 dedup_id semantics enforced by non-persistence).
+        use crate::core::agent_session::inject_runtime_context;
+
+        let raw = "Show me the test plan.";
+        let wrapped1 = inject_runtime_context(raw).await;
+        let wrapped2 = inject_runtime_context(raw).await;
+
+        // Each turn re-wraps from the raw prompt — it does NOT pick up the
+        // previous turn's wrapper (which is what an explicit dedup_id would prevent).
+        let runtime_count_in_wrapped2 = wrapped2.matches("<runtime_context").count();
+        assert_eq!(
+            runtime_count_in_wrapped2, 1,
+            "wrapped2 must contain exactly one runtime_context block: {wrapped2}"
+        );
+        // Both wrappers contain the same raw prompt body
+        assert!(wrapped1.contains(raw));
+        assert!(wrapped2.contains(raw));
     }
 }

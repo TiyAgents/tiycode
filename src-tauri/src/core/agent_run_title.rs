@@ -211,10 +211,10 @@ pub(crate) async fn generate_thread_title(
     })?;
 
     let prompt = build_title_prompt_from_messages(messages, response_language, response_style);
+    // Phase 6: title system prompt sourced via Composer (PromptSurface::Title).
+    let title_system_prompt = build_title_system_prompt().await;
     let context = TiyContext {
-        system_prompt: Some(
-            "You write concise conversation titles. Return only the title text.".to_string(),
-        ),
+        system_prompt: Some(title_system_prompt),
         messages: vec![TiyMessage::User(UserMessage::text(prompt))],
         tools: None,
     };
@@ -258,26 +258,56 @@ pub(crate) async fn generate_thread_title(
     Ok(normalize_generated_title(&message.text_content()))
 }
 
+/// Build the Title surface system prompt via Composer (Phase 6).
+pub(crate) async fn build_title_system_prompt() -> String {
+    use crate::core::prompt::{
+        BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptSurface, RunMode,
+        SectionId, SignalCache, SourceExecPolicy, SystemClock,
+    };
+    use std::sync::Arc;
+
+    let placeholder_pool =
+        sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("placeholder pool");
+    let registry = Arc::new(crate::core::prompt::registry::default_registry());
+    let composer = Composer::new(
+        registry,
+        SourceExecPolicy::default(),
+        Arc::new(NoopRedactor),
+    );
+    let cx = BuildCx {
+        pool: &placeholder_pool,
+        workspace_path: "",
+        thread_id: None,
+        run_id: None,
+        raw_plan: None,
+        run_mode: RunMode::Default,
+        helper_profile: None,
+        custom_subagent_slug: None,
+        response_language: None,
+        target_model: ModelTarget::AnthropicClaude {
+            context_window: 200_000,
+            supports_cache_control: false,
+        },
+        clock: Arc::new(SystemClock),
+        signals: Arc::new(SignalCache::new()),
+        renderer: Arc::new(MarkdownRenderer),
+    };
+    composer
+        .render_section_only(&SectionId::TitleContract, &PromptSurface::Title, &cx)
+        .await
+        .map(|b| b.markdown)
+        .unwrap_or_else(|| {
+            "You write concise conversation titles. Return only the title text.".to_string()
+        })
+}
+
 pub(crate) fn build_title_prompt_from_messages(
     messages: &[MessageRecord],
     response_language: Option<&str>,
     response_style: ProfileResponseStyle,
 ) -> String {
-    let language_rule = match response_language {
-        Some(language) => format!("- Write the title in {language}."),
-        None => "- Match the conversation language.".to_string(),
-    };
-    let style_rule = match response_style {
-        ProfileResponseStyle::Balanced => {
-            "- Keep the title clear and natural, with enough specificity to scan quickly."
-        }
-        ProfileResponseStyle::Concise => {
-            "- Keep the title especially terse, direct, and low-friction."
-        }
-        ProfileResponseStyle::Guide => {
-            "- Prefer a title that signals the user's goal or decision focus clearly."
-        }
-    };
+    let language_rule = super::agent_session_types::format_title_language_rule(response_language);
+    let style_rule = super::agent_session_types::format_title_style_rule(response_style);
 
     let mut conversation = String::new();
     // Messages are in chronological order (oldest first); iterate in reverse
@@ -381,4 +411,33 @@ pub(crate) fn normalize_generated_title(raw: &str) -> Option<String> {
 
 pub(crate) fn collapse_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn build_title_system_prompt_returns_non_empty() {
+        let prompt = build_title_system_prompt().await;
+        assert!(
+            !prompt.is_empty(),
+            "Title system prompt should not be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_title_system_prompt_not_empty_and_does_not_panic() {
+        let prompt = build_title_system_prompt().await;
+        // The function should always return something, even if it falls back
+        // to the hardcoded default when no TitleContract source is available.
+        assert!(!prompt.is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_title_system_prompt_is_deterministic() {
+        let a = build_title_system_prompt().await;
+        let b = build_title_system_prompt().await;
+        assert_eq!(a, b, "Title prompt should be deterministic across calls");
+    }
 }

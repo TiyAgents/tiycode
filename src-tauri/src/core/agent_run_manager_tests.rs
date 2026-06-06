@@ -569,9 +569,9 @@ pub(super) mod tests {
         );
     }
 
-    #[test]
-    fn compact_summary_system_prompt_includes_wrapper_example() {
-        let prompt = build_compact_summary_system_prompt(None);
+    #[tokio::test]
+    async fn compact_summary_system_prompt_includes_wrapper_example() {
+        let prompt = build_compact_summary_system_prompt(None).await;
 
         assert!(prompt.contains("Output rules:"));
         assert!(prompt.contains("Do not output any text before or after the wrapper."));
@@ -580,9 +580,9 @@ pub(super) mod tests {
         assert!(prompt.contains("</context_summary>"));
     }
 
-    #[test]
-    fn compact_summary_system_prompt_uses_response_language_when_present() {
-        let prompt = build_compact_summary_system_prompt(Some(" 简体中文 "));
+    #[tokio::test]
+    async fn compact_summary_system_prompt_uses_response_language_when_present() {
+        let prompt = build_compact_summary_system_prompt(Some(" 简体中文 ")).await;
 
         assert!(prompt.contains(
             "Respond in 简体中文 unless the user explicitly asks for a different language."
@@ -988,27 +988,27 @@ pub(super) mod tests {
         assert!(detect_prior_summary(&messages).is_none());
     }
 
-    #[test]
-    fn merge_summary_system_prompt_explains_the_merge_contract() {
-        let prompt = build_merge_summary_system_prompt(None);
+    #[tokio::test]
+    async fn merge_summary_system_prompt_explains_the_merge_contract() {
+        let prompt = build_merge_summary_system_prompt(None).await;
         assert!(prompt.contains("PRIOR summary"));
         assert!(prompt.contains("DELTA"));
         assert!(prompt.contains("<context_summary>"));
         assert!(prompt.contains("</context_summary>"));
     }
 
-    #[test]
-    fn merge_summary_system_prompt_uses_response_language_when_present() {
-        let prompt = build_merge_summary_system_prompt(Some("Japanese"));
+    #[tokio::test]
+    async fn merge_summary_system_prompt_uses_response_language_when_present() {
+        let prompt = build_merge_summary_system_prompt(Some("Japanese")).await;
 
         assert!(prompt.contains(
             "Respond in Japanese unless the user explicitly asks for a different language."
         ));
     }
 
-    #[test]
-    fn merge_summary_system_prompt_ignores_blank_response_language() {
-        let prompt = build_merge_summary_system_prompt(Some("   "));
+    #[tokio::test]
+    async fn merge_summary_system_prompt_ignores_blank_response_language() {
+        let prompt = build_merge_summary_system_prompt(Some("   ")).await;
 
         assert!(!prompt.contains("Respond in"));
     }

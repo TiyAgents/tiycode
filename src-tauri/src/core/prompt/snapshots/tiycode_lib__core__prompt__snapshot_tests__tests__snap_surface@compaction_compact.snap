@@ -1,0 +1,9 @@
+---
+source: src/core/prompt/snapshot_tests.rs
+expression: snapshot_text
+---
+=== COMPOSED PROMPT TEXT ===
+
+
+=== AUDIT ===
+schema_version: 3

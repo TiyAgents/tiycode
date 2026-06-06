@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tiycore::agent::AgentTool;
 use tiycore::thinking::ThinkingLevel;
 use tiycore::types::{Model, OpenAICompletionsCompat, Transport};
 
 use crate::core::context_compression::ContextTokenCalibration;
+use crate::core::prompt::CacheMarkerArbiter;
 use crate::model::provider::AgentProfileRecord;
 use crate::model::thread::{MessageRecord, ToolCallDto};
 
@@ -167,6 +169,10 @@ pub struct AgentSessionSpec {
     pub model_plan: ResolvedRuntimeModelPlan,
     pub initial_prompt: Option<String>,
     pub initial_context_calibration: ContextTokenCalibration,
+    /// Global cache marker arbiter for the request lifecycle.
+    /// Records system prompt markers and allocates message-layer quota.
+    /// Must be reset after each LLM call (§ 3.7.1).
+    pub cache_arbiter: Option<Arc<dyn CacheMarkerArbiter>>,
 }
 
 pub(crate) fn default_openai_compatible_compat(
@@ -233,6 +239,31 @@ pub fn response_style_system_instruction(style: ProfileResponseStyle) -> &'stati
         }
         ProfileResponseStyle::Guide => {
             "Response style: guided. Lead with the answer, then explain the reasoning, tradeoffs, and recommended next steps clearly. Be intentionally explanatory when that helps the user learn or make a decision. Surface relevant alternatives, caveats, or examples when useful."
+        }
+    }
+}
+
+/// Shared formatting for title-generation language rule line.
+/// Used by both ProfileInstructionsSource and build_title_prompt_from_messages
+/// to avoid duplicate language-rule text.
+pub fn format_title_language_rule(response_language: Option<&str>) -> String {
+    match response_language {
+        Some(language) => format!("- Write the title in {language}."),
+        None => "- Match the conversation language.".to_string(),
+    }
+}
+
+/// Shared formatting for title-generation style rule line.
+pub fn format_title_style_rule(style: ProfileResponseStyle) -> &'static str {
+    match style {
+        ProfileResponseStyle::Balanced => {
+            "- Keep the title clear and natural, with enough specificity to scan quickly."
+        }
+        ProfileResponseStyle::Concise => {
+            "- Keep the title especially terse, direct, and low-friction."
+        }
+        ProfileResponseStyle::Guide => {
+            "- Prefer a title that signals the user's goal or decision focus clearly."
         }
     }
 }
