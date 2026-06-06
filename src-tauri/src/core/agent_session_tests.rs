@@ -34,6 +34,7 @@ pub(super) mod tests {
     use crate::core::plan_checkpoint::{
         build_plan_artifact_from_tool_input, build_plan_message_metadata,
     };
+    use crate::core::prompt::templates::strip_front_matter;
     use crate::core::subagent::{
         HelperAgentOrchestrator, RuntimeOrchestrationTool, SubagentProfile,
     };
@@ -45,20 +46,6 @@ pub(super) mod tests {
     use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto, ToolCallDto};
     use crate::persistence::init_database;
     use crate::persistence::repo::provider_repo;
-
-    /// Strip YAML front-matter (delimited by ---) from a template string.
-    fn strip_front_matter(tpl: &str) -> &str {
-        let tpl = tpl.trim_start();
-        if !tpl.starts_with("---") {
-            return tpl;
-        }
-        let after_first = &tpl[3..];
-        if let Some(end) = after_first.find("\n---") {
-            let body = after_first[end + 4..].trim_start();
-            return body;
-        }
-        tpl
-    }
 
     /// Load a final response structure template body for assertions.
     fn final_response_structure_body() -> String {

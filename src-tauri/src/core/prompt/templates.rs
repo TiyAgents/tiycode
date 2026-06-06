@@ -333,6 +333,21 @@ where
     }
 }
 
+/// Strip YAML front-matter (delimited by `---`) and return the template body.
+/// Useful for lightweight stripping when full `parse_front_matter` is overkill.
+pub(crate) fn strip_front_matter(tpl: &str) -> &str {
+    let tpl = tpl.trim_start();
+    if !tpl.starts_with("---") {
+        return tpl;
+    }
+    let after_first = &tpl[3..];
+    if let Some(end) = after_first.find("\n---") {
+        let body = after_first[end + 4..].trim_start();
+        return body;
+    }
+    tpl
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,5 +519,42 @@ mod tests {
         keys.sort();
         keys.dedup();
         keys
+    }
+
+    // ── strip_front_matter tests ────────────────────────────────
+
+    #[test]
+    fn strip_front_matter_empty_input() {
+        assert_eq!(strip_front_matter(""), "");
+    }
+
+    #[test]
+    fn strip_front_matter_no_front_matter() {
+        let body = "This is a plain template body.";
+        assert_eq!(strip_front_matter(body), body);
+    }
+
+    #[test]
+    fn strip_front_matter_strips_yaml_block() {
+        let raw = "---\nsection_id: Test\nversion: 1\n---\nBody content here.";
+        assert_eq!(strip_front_matter(raw), "Body content here.");
+    }
+
+    #[test]
+    fn strip_front_matter_missing_closing_delimiter_returns_original() {
+        let raw = "---\nsection_id: Test\nbody without closing";
+        assert_eq!(strip_front_matter(raw), raw);
+    }
+
+    #[test]
+    fn strip_front_matter_triple_dash_in_body_preserved() {
+        let raw = "---\nsection_id: Test\nversion: 1\n---\nbody\nwith --- inside";
+        assert_eq!(strip_front_matter(raw), "body\nwith --- inside");
+    }
+
+    #[test]
+    fn strip_front_matter_trims_leading_whitespace() {
+        let raw = "   \n  ---\nsection_id: Test\n---\n   body with leading spaces";
+        assert_eq!(strip_front_matter(raw), "body with leading spaces");
     }
 }

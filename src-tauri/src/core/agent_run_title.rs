@@ -259,7 +259,7 @@ pub(crate) async fn generate_thread_title(
 }
 
 /// Build the Title surface system prompt via Composer (Phase 6).
-async fn build_title_system_prompt() -> String {
+pub(crate) async fn build_title_system_prompt() -> String {
     use crate::core::prompt::{
         BuildCx, Composer, MarkdownRenderer, ModelTarget, NoopRedactor, PromptSurface, RunMode,
         SectionId, SignalCache, SourceExecPolicy, SystemClock,
@@ -411,4 +411,33 @@ pub(crate) fn normalize_generated_title(raw: &str) -> Option<String> {
 
 pub(crate) fn collapse_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn build_title_system_prompt_returns_non_empty() {
+        let prompt = build_title_system_prompt().await;
+        assert!(
+            !prompt.is_empty(),
+            "Title system prompt should not be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_title_system_prompt_not_empty_and_does_not_panic() {
+        let prompt = build_title_system_prompt().await;
+        // The function should always return something, even if it falls back
+        // to the hardcoded default when no TitleContract source is available.
+        assert!(!prompt.is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_title_system_prompt_is_deterministic() {
+        let a = build_title_system_prompt().await;
+        let b = build_title_system_prompt().await;
+        assert_eq!(a, b, "Title prompt should be deterministic across calls");
+    }
 }

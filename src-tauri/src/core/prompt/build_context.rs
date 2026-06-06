@@ -73,38 +73,6 @@ impl ModelTarget {
 }
 
 impl<'a> BuildCx<'a> {
-    /// Create a context for the main agent surface.
-    pub fn for_main_agent(
-        pool: &'a SqlitePool,
-        workspace_path: &'a str,
-        thread_id: Option<&'a str>,
-        run_id: Option<&'a str>,
-        raw_plan: Option<&'a RuntimeModelPlan>,
-        run_mode: RunMode,
-        clock: Arc<dyn Clock>,
-        renderer: Arc<dyn SectionRenderer>,
-        response_language: Option<&'a str>,
-    ) -> Self {
-        Self {
-            pool,
-            workspace_path,
-            thread_id,
-            run_id,
-            raw_plan,
-            run_mode,
-            helper_profile: None,
-            custom_subagent_slug: None,
-            target_model: ModelTarget::AnthropicClaude {
-                context_window: 200_000,
-                supports_cache_control: true,
-            },
-            clock,
-            signals: Arc::new(SignalCache::new()),
-            renderer,
-            response_language,
-        }
-    }
-
     /// Derive a child context for a helper subagent, sharing clock and renderer
     /// but with a fresh SignalCache (subagent builds are independent).
     pub fn derive_for_helper(

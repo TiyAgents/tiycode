@@ -18,6 +18,7 @@ use super::agent_run_manager::{
     SUMMARY_HISTORY_MIN_CHARS,
 };
 use super::agent_run_title::collapse_whitespace;
+use crate::core::prompt::templates::strip_front_matter;
 
 pub(crate) fn parse_message_metadata<T>(message: &MessageRecord) -> Result<T, AppError>
 where
@@ -105,20 +106,6 @@ pub(crate) fn build_implementation_handoff_prompt(
             &plan_file_note,
         ),
     }
-}
-
-/// Strip YAML front-matter and return the template body.
-fn strip_front_matter(tpl: &str) -> &str {
-    let tpl = tpl.trim_start();
-    if !tpl.starts_with("---") {
-        return tpl;
-    }
-    let after_first = &tpl[3..];
-    if let Some(end) = after_first.find("\n---") {
-        let body = after_first[end + 4..].trim_start();
-        return body;
-    }
-    tpl
 }
 
 /// Render a handoff template that includes plan markdown.
@@ -875,4 +862,44 @@ pub(crate) fn append_compact_instructions(
         "{base_summary}\n\n<extra_instructions>\n{}\n</extra_instructions>",
         extra
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn build_compact_summary_system_prompt_returns_non_empty() {
+        let prompt = build_compact_summary_system_prompt(None).await;
+        assert!(
+            !prompt.is_empty(),
+            "Compact summary prompt should not be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_merge_summary_system_prompt_returns_non_empty() {
+        let prompt = build_merge_summary_system_prompt(None).await;
+        assert!(
+            !prompt.is_empty(),
+            "Merge summary prompt should not be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_and_merge_prompts_differ() {
+        let compact = build_compact_summary_system_prompt(None).await;
+        let merge = build_merge_summary_system_prompt(None).await;
+        assert_ne!(
+            compact, merge,
+            "Compact and Merge prompts should produce distinct output"
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_summary_prompt_with_response_language() {
+        let prompt = build_compact_summary_system_prompt(Some("zh-CN")).await;
+        // Should still be non-empty with a language override
+        assert!(!prompt.is_empty());
+    }
 }
