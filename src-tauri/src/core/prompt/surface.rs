@@ -48,9 +48,9 @@ pub enum SurfacePattern {
     AnyMainAgent,
     /// Matches a specific MainAgent run_mode
     MainAgent(RunMode),
-    /// Matches any subagent surface (explore, review, custom)
+    /// Matches any subagent surface (explore, review, judge, custom)
     AnySubagent,
-    /// Matches built-in explore + review subagents only
+    /// Matches built-in explore + review + judge subagents only
     BuiltinSubagent,
     /// Matches any custom subagent regardless of slug
     CustomSubagent,

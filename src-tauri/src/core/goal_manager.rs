@@ -213,29 +213,6 @@ impl GoalManager {
         Ok(())
     }
 
-    /// Mark the goal as complete with evidence.
-    pub async fn mark_complete(&self, goal_id: &str, evidence: &str) -> Result<(), AppError> {
-        if evidence.trim().is_empty() {
-            return Err(AppError::validation(
-                ErrorSource::Settings,
-                "evidence is required to mark a goal as complete",
-            ));
-        }
-        let updated = goal_repo::update_status(
-            &self.pool,
-            goal_id,
-            GoalStatus::Complete,
-            None,
-            None,
-            Some(evidence),
-        )
-        .await?;
-        if !updated {
-            return Err(AppError::not_found(ErrorSource::Settings, "goal"));
-        }
-        Ok(())
-    }
-
     /// Mark the goal as budget-limited.
     pub async fn mark_budget_limited(&self, goal_id: &str) -> Result<(), AppError> {
         let updated = goal_repo::update_status(

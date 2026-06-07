@@ -773,7 +773,7 @@ export async function goalClear(threadId: string): Promise<boolean> {
 
 export type GoalEvaluateResult = {
   goal: GoalPayload;
-  verdict: "continue" | "challenge_evidence" | "complete" | "paused" | "budget_limited" | "skipped";
+  verdict: "continue" | "challenge_evidence" | "paused" | "budget_limited" | "skipped";
   continuationPrompt?: string | null;
 };
 

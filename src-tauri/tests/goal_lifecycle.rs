@@ -321,24 +321,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_complete_with_evidence() {
-        let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
-        let goal = mgr.create_goal("Test goal", None).await.unwrap();
-
-        mgr.mark_complete(&goal.id, "All tests pass, files created")
-            .await
-            .unwrap();
-
-        let completed = mgr.get_active().await.unwrap().unwrap();
-        assert_eq!(completed.status, GoalStatus::Complete);
-        assert_eq!(
-            completed.evidence.as_deref(),
-            Some("All tests pass, files created")
-        );
-    }
-
-    #[tokio::test]
     async fn mark_budget_limited() {
         let pool = setup_pool().await;
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
@@ -382,28 +364,6 @@ mod tests {
         let prompt = mgr.render_challenge_prompt();
         assert!(prompt.contains("agent_judge"));
         assert!(prompt.contains("cannot self-declare"));
-    }
-
-    // ── mark_complete validation & test gap coverage ──
-
-    #[tokio::test]
-    async fn mark_complete_rejects_empty_evidence() {
-        let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
-        let goal = mgr.create_goal("Test goal", None).await.unwrap();
-
-        let err = mgr.mark_complete(&goal.id, "").await.unwrap_err();
-        assert!(err.user_message.contains("evidence is required"));
-    }
-
-    #[tokio::test]
-    async fn mark_complete_rejects_whitespace_only_evidence() {
-        let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
-        let goal = mgr.create_goal("Test goal", None).await.unwrap();
-
-        let err = mgr.mark_complete(&goal.id, "   ").await.unwrap_err();
-        assert!(err.user_message.contains("evidence is required"));
     }
 
     #[tokio::test]
