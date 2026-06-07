@@ -1094,6 +1094,7 @@ const en: Record<TranslationKey, string> = {
   "goal.status.paused": "Paused",
   "goal.status.budgetLimited": "Budget Exhausted",
   "goal.status.complete": "Complete",
+  "goal.status.verified": "Verified",
   "goal.time.elapsed": "Running for {{time}}",
   "goal.time.hoursMinutes": "{{hours}}h {{minutes}}m",
   "goal.time.minutesSeconds": "{{minutes}}m {{seconds}}s",

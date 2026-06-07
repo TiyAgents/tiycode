@@ -735,6 +735,11 @@ export type GoalPayload = {
   pauseDetail?: string | null;
   evidence?: string | null;
   lastEvaluatedRunId?: string | null;
+  judgePassed?: boolean;
+  judgeCompleteness?: number | null;
+  judgeFindings?: string | null;
+  judgeSummary?: string | null;
+  judgeEvaluatedRunId?: string | null;
 };
 
 export async function goalGetState(threadId: string): Promise<GoalPayload | null> {
@@ -768,7 +773,7 @@ export async function goalClear(threadId: string): Promise<boolean> {
 
 export type GoalEvaluateResult = {
   goal: GoalPayload;
-  verdict: "continue" | "challenge_evidence" | "complete" | "paused" | "budget_limited";
+  verdict: "continue" | "challenge_evidence" | "complete" | "paused" | "budget_limited" | "skipped";
   continuationPrompt?: string | null;
 };
 

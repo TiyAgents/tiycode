@@ -101,6 +101,11 @@ export interface GoalStoreState {
   pauseDetail?: string | null;
   evidence?: string | null;
   lastEvaluatedRunId?: string | null;
+  judgePassed?: boolean;
+  judgeCompleteness?: number | null;
+  judgeFindings?: string | null;
+  judgeSummary?: string | null;
+  judgeEvaluatedRunId?: string | null;
 }
 
 // ---------------------------------------------------------------------------

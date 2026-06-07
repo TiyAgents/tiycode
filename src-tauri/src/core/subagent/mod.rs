@@ -1,8 +1,10 @@
+pub mod judge_contract;
 pub mod orchestrator;
 pub mod parallel_contract;
 pub mod review_contract;
 pub mod runtime_orchestration;
 
+pub use judge_contract::{extract_judge_report, JudgeReport, JudgeRequest};
 pub use orchestrator::{
     HelperAgentOrchestrator, HelperRunRequest, HelperRunResult, SubagentActivityStatus,
     SubagentProgressSnapshot,

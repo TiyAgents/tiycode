@@ -35,7 +35,7 @@ export function GoalStatusBar({ threadId }: Props) {
       case "active": return "goal.status.active";
       case "paused": return "goal.status.paused";
       case "budget_limited": return "goal.status.budgetLimited";
-      case "complete": return "goal.status.complete";
+      case "complete": return goal.judgePassed ? "goal.status.verified" : "goal.status.complete";
       default: return "goal.status.active";
     }
   })();

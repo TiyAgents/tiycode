@@ -1127,6 +1127,15 @@ impl HelperDelegationContext {
             RuntimeOrchestrationTool::Parallel => {
                 return Err("agent_parallel cannot be used as an individual helper".to_string());
             }
+            RuntimeOrchestrationTool::Judge => {
+                // Hard gate: agent_judge is a main-agent-only tool. A subagent
+                // (including Judge itself) must never recursively request goal
+                // acceptance, even if the tool name was parsed successfully.
+                return Err(
+                    "agent_judge can only be called by the main agent for the current goal"
+                        .to_string(),
+                );
+            }
             RuntimeOrchestrationTool::Custom(slug) => {
                 crate::core::agent_session_tools::resolve_custom_subagent_profile_from_pool(
                     &self.orchestrator.pool,
@@ -1470,6 +1479,9 @@ async fn build_helper_system_prompt(
             inherited_run_mode: rm,
         },
         SubagentProfile::Review => PromptSurface::SubagentReview {
+            inherited_run_mode: rm,
+        },
+        SubagentProfile::Judge => PromptSurface::SubagentJudge {
             inherited_run_mode: rm,
         },
         SubagentProfile::Custom { slug, .. } => PromptSurface::SubagentCustom {

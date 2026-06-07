@@ -16,10 +16,10 @@ use crate::core::plan_checkpoint::{
     build_plan_message_metadata, plan_markdown, write_plan_file,
 };
 use crate::core::subagent::{
-    extract_review_report, render_parallel_summary, HelperRunRequest, HelperRunResult,
-    ParallelSubagentBatchStatus, ParallelSubagentRequest, ParallelSubagentSummary,
-    ParallelSubagentTask, ParallelSubagentTaskResult, ParallelSubagentTaskStatus, ReviewRequest,
-    RuntimeOrchestrationTool, SubagentProfile,
+    extract_judge_report, extract_review_report, render_parallel_summary, HelperRunRequest,
+    HelperRunResult, JudgeReport, ParallelSubagentBatchStatus, ParallelSubagentRequest,
+    ParallelSubagentSummary, ParallelSubagentTask, ParallelSubagentTaskResult,
+    ParallelSubagentTaskStatus, ReviewRequest, RuntimeOrchestrationTool, SubagentProfile,
 };
 use crate::core::tool_gateway::{
     ApprovalRequest, ToolExecutionOptions, ToolExecutionRequest, ToolGatewayResult,
@@ -294,33 +294,6 @@ impl AgentSession {
                 .await;
         }
 
-        // Goal tools — handle before the main tool gateway
-        if tool_name == crate::core::goal_manager::GOAL_SCORED_TOOL_NAME {
-            let tool_call_storage_id = uuid::Uuid::now_v7().to_string();
-            let insert_result = tool_call_repo::insert(
-                &self.pool,
-                &tool_call_repo::ToolCallInsert {
-                    id: tool_call_storage_id.clone(),
-                    tool_call_id: tool_call_id.to_string(),
-                    run_id: self.spec.run_id.clone(),
-                    thread_id: self.spec.thread_id.clone(),
-                    helper_id: None,
-                    tool_name: tool_name.to_string(),
-                    tool_input_json: tool_input.to_string(),
-                    status: "requested".to_string(),
-                },
-            )
-            .await;
-
-            if let Err(error) = insert_result {
-                return agent_error_result(format!("failed to persist tool call: {error}"));
-            }
-
-            return self
-                .execute_goal_tool(tool_name, tool_call_id, &tool_call_storage_id, tool_input)
-                .await;
-        }
-
         let tool_call_storage_id = uuid::Uuid::now_v7().to_string();
         let insert_result = tool_call_repo::insert(
             &self.pool,
@@ -350,6 +323,10 @@ impl AgentSession {
                         tool_input,
                     )
                     .await
+                }
+                RuntimeOrchestrationTool::Judge => {
+                    self.execute_judge_tool(tool_call_id, &tool_call_storage_id, tool_input)
+                        .await
                 }
                 _ => {
                     self.execute_helper_tool(tool, tool_call_id, &tool_call_storage_id, tool_input)
@@ -884,6 +861,16 @@ impl AgentSession {
     ) -> Result<ResolvedHelperDelegate, String> {
         if tool == RuntimeOrchestrationTool::Parallel {
             return Err("agent_parallel cannot be used as an individual helper".to_string());
+        }
+
+        if tool == RuntimeOrchestrationTool::Judge {
+            // agent_judge is a main-agent-only acceptance tool: it must not be
+            // reachable as a generic helper delegate or as an agent_parallel
+            // batch target.
+            return Err(
+                "agent_judge can only be called directly by the main agent for the current goal"
+                    .to_string(),
+            );
         }
 
         let HelperToolTask {
@@ -1614,202 +1601,238 @@ impl AgentSession {
         }
     }
 
-    // ── Goal tool handlers ──
+    // ── Goal acceptance Judge handler ──
 
-    async fn execute_goal_tool(
+    /// Run the main-agent-only `agent_judge` acceptance flow: build a Judge task
+    /// with the current goal injected, run the Judge helper, parse its structured
+    /// verdict, persist it, and (on pass) flip the goal to verified/complete.
+    async fn execute_judge_tool(
         &self,
-        tool_name: &str,
-        _tool_call_id: &str,
+        tool_call_id: &str,
         tool_call_storage_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
-        let pool = self.pool.clone();
-        let thread_id = self.spec.thread_id.clone();
+        // Parse the main agent's task / rationale.
+        let request = match crate::core::subagent::JudgeRequest::from_tool_input(tool_input) {
+            Ok(request) => request,
+            Err(error) => {
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_storage_id,
+                    &serde_json::json!({ "error": &error }).to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                return agent_error_result(error);
+            }
+        };
 
-        match tool_name {
-            name if name == crate::core::goal_manager::GOAL_SCORED_TOOL_NAME => {
-                let status = tool_input
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let evidence = tool_input
-                    .get("evidence")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let pledge = tool_input
-                    .get("pledge")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+        // Backstop: re-query goal state. agent_judge is injected only when an
+        // un-verified goal exists, but a stale tool set or a direct call must be
+        // rejected here too.
+        let goal = match crate::persistence::repo::goal_repo::find_by_thread_id(
+            &self.pool,
+            &self.spec.thread_id,
+        )
+        .await
+        {
+            Ok(Some(goal)) => goal,
+            Ok(None) => {
+                let err_msg =
+                    "agent_judge cannot run: no goal exists for this thread. Create one with the /goal command first.";
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_storage_id,
+                    &serde_json::json!({ "error": err_msg }).to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                return agent_error_result(err_msg);
+            }
+            Err(e) => {
+                let err_msg = format!("Failed to load goal: {e}");
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_storage_id,
+                    &serde_json::json!({ "error": &err_msg }).to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                return agent_error_result(err_msg);
+            }
+        };
 
-                // Only support marking as complete
-                if status != "complete" {
-                    let err_msg = "goal_scored only supports status='complete'. Use /goal pause|resume|clear from the UI for other lifecycle operations.";
-                    tool_call_repo::update_result(
-                        &self.pool,
-                        tool_call_storage_id,
-                        &serde_json::json!({ "error": err_msg }).to_string(),
-                        "failed",
-                    )
-                    .await
-                    .ok();
-                    return agent_error_result(err_msg);
+        if goal.status == crate::model::goal::GoalStatus::Complete && goal.judge_passed {
+            let err_msg =
+                "The goal has already passed acceptance. No further verification is needed.";
+            tool_call_repo::update_result(
+                &self.pool,
+                tool_call_storage_id,
+                &serde_json::json!({ "error": err_msg }).to_string(),
+                "failed",
+            )
+            .await
+            .ok();
+            return agent_error_result(err_msg);
+        }
+
+        // Build the Judge task: inject the goal objective + status + last verdict
+        // so the Judge does not rely on the main agent's self-report.
+        let mut prior_verdict = String::new();
+        if goal.judge_evaluated_run_id.is_some() {
+            if let Some(summary) = goal.judge_summary.as_deref() {
+                if !summary.trim().is_empty() {
+                    prior_verdict.push_str(&format!("\nPrevious Judge summary: {summary}"));
                 }
-
-                // The pledge must match the required text exactly.
-                if pledge.trim() != crate::core::goal_manager::GOAL_SCORED_PLEDGE {
-                    let err_msg = format!(
-                        "goal_scored rejected: the 'pledge' parameter must be passed verbatim as: \"{}\"",
-                        crate::core::goal_manager::GOAL_SCORED_PLEDGE
-                    );
-                    tool_call_repo::update_result(
-                        &self.pool,
-                        tool_call_storage_id,
-                        &serde_json::json!({ "error": &err_msg }).to_string(),
-                        "failed",
-                    )
-                    .await
-                    .ok();
-                    return agent_error_result(err_msg);
-                }
-
-                if evidence.trim().is_empty() {
-                    // Evidence is empty — reject the completion and challenge
-                    let mgr = crate::core::goal_manager::GoalManager::new(
-                        pool,
-                        thread_id,
-                        self.goal_runtime.clone(),
-                    );
-                    let challenge = mgr.render_challenge_prompt(
-                        crate::core::goal_manager::ChallengePromptVariant::NoEvidence,
-                    );
-                    let result_text =
-                        format!("Goal completion rejected: evidence is required. {challenge}");
-                    tool_call_repo::update_result(
-                        &self.pool,
-                        tool_call_storage_id,
-                        &serde_json::json!({ "output": &result_text }).to_string(),
-                        "completed",
-                    )
-                    .await
-                    .ok();
-                    return AgentToolResult::text(result_text);
-                }
-
-                let mgr = crate::core::goal_manager::GoalManager::new(
-                    pool,
-                    thread_id,
-                    self.goal_runtime.clone(),
-                );
-                match mgr.get_active().await {
-                    Ok(Some(goal)) => {
-                        if goal.status != crate::model::goal::GoalStatus::Active {
-                            let err_msg = format!(
-                                "Goal is not active (current status: {:?}). Cannot mark as complete.",
-                                goal.status
-                            );
-                            tool_call_repo::update_result(
-                                &self.pool,
-                                tool_call_storage_id,
-                                &serde_json::json!({ "error": &err_msg }).to_string(),
-                                "failed",
-                            )
-                            .await
-                            .ok();
-                            return agent_error_result(err_msg);
+            }
+            if let Some(findings_json) = goal.judge_findings.as_deref() {
+                if let Ok(findings) = serde_json::from_str::<Vec<String>>(findings_json) {
+                    if !findings.is_empty() {
+                        prior_verdict.push_str("\nPrevious Judge findings:");
+                        for finding in findings {
+                            prior_verdict.push_str(&format!("\n- {finding}"));
                         }
-                        let paused_seconds = {
-                            let mut guard = self.goal_runtime.lock().unwrap_or_else(|poisoned| {
-                                tracing::warn!(
-                                    "goal_scored: goal_runtime mutex poisoned, recovering"
-                                );
-                                poisoned.into_inner()
-                            });
-                            guard.take_run_paused_seconds(&self.spec.run_id).max(0)
-                        };
-                        let active_run_seconds =
-                            crate::persistence::repo::run_repo::get_active_run_elapsed_seconds(
-                                &self.pool,
-                                &self.spec.thread_id,
-                            )
-                            .await
-                            .unwrap_or(None)
-                            .map(|seconds| (seconds - paused_seconds).max(0));
-
-                        match mgr.mark_complete(&goal.id, evidence).await {
-                            Ok(()) => {
-                                if let Some(run_seconds) = active_run_seconds {
-                                    if run_seconds > 0 {
-                                        mgr.account_usage(&goal.id, 0, run_seconds).await.ok();
-                                    }
-                                }
-
-                                let updated = mgr.get_active().await.ok().flatten();
-                                if let Some(ref record) = updated {
-                                    let payload =
-                                        crate::core::goal_manager::GoalManager::to_payload(record);
-                                    let _ = self.event_tx.send(ThreadStreamEvent::GoalCompleted {
-                                        thread_id: record.thread_id.clone(),
-                                        evidence: evidence.to_string(),
-                                    });
-                                    let _ =
-                                        self.event_tx.send(ThreadStreamEvent::GoalStateUpdated {
-                                            thread_id: record.thread_id.clone(),
-                                            goal: Some(payload),
-                                        });
-                                }
-                                let result_text =
-                                    format!("Goal marked as complete. Evidence: {evidence}");
-                                tool_call_repo::update_result(
-                                    &self.pool,
-                                    tool_call_storage_id,
-                                    &serde_json::json!({ "output": &result_text }).to_string(),
-                                    "completed",
-                                )
-                                .await
-                                .ok();
-                                AgentToolResult::text(result_text)
-                            }
-                            Err(e) => {
-                                let err_msg = format!("Failed to complete goal: {e}");
-                                tool_call_repo::update_result(
-                                    &self.pool,
-                                    tool_call_storage_id,
-                                    &serde_json::json!({ "error": &err_msg }).to_string(),
-                                    "failed",
-                                )
-                                .await
-                                .ok();
-                                agent_error_result(err_msg)
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        let err_msg = "No active goal found. Create one first with /goal command.";
-                        tool_call_repo::update_result(
-                            &self.pool,
-                            tool_call_storage_id,
-                            &serde_json::json!({ "error": err_msg }).to_string(),
-                            "failed",
-                        )
-                        .await
-                        .ok();
-                        agent_error_result(err_msg)
-                    }
-                    Err(e) => {
-                        let err_msg = format!("Failed to load goal: {e}");
-                        tool_call_repo::update_result(
-                            &self.pool,
-                            tool_call_storage_id,
-                            &serde_json::json!({ "error": &err_msg }).to_string(),
-                            "failed",
-                        )
-                        .await
-                        .ok();
-                        agent_error_result(err_msg)
                     }
                 }
             }
-            _ => agent_error_result(format!("Unknown goal tool: {tool_name}")),
+        }
+
+        let judge_task = format!(
+            "You are verifying acceptance of the following goal for the current project.\n\n\
+Goal id: {goal_id}\n\
+Goal status: {status:?}\n\
+Goal objective:\n{objective}\n\
+{prior_verdict}\n\n\
+The main agent's note for this verification request:\n{task}\n\n\
+Independently inspect the project's current state and decide whether it satisfies the goal. \
+Return your structured JudgeReport verdict.",
+            goal_id = goal.id,
+            status = goal.status,
+            objective = goal.objective,
+            prior_verdict = prior_verdict,
+            task = request.task,
+        );
+
+        // Build a Judge delegate (depth 2, primary model) and run it.
+        let tool = RuntimeOrchestrationTool::Judge;
+        let helper_profile = resolve_helper_profile(&tool);
+        let model_role = match resolve_helper_model_role(
+            &self.spec.model_plan,
+            &tool,
+            helper_profile.as_ref(),
+        ) {
+            Some(role) => role,
+            None => {
+                let err_msg = "Failed to resolve a model for agent_judge.".to_string();
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_storage_id,
+                    &serde_json::json!({ "error": &err_msg }).to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                return agent_error_result(err_msg);
+            }
+        };
+
+        let delegate = ResolvedHelperDelegate {
+            tool: tool.clone(),
+            agent_name: tool.tool_name(),
+            task: judge_task,
+            review_request: None,
+            helper_profile,
+            model_role,
+        };
+
+        let report: JudgeReport = match self.run_helper_for_delegate(&delegate, tool_call_id).await
+        {
+            Ok(summary) => extract_judge_report(
+                summary
+                    .raw_summary
+                    .as_deref()
+                    .unwrap_or(summary.summary.as_str()),
+            ),
+            Err(error) => {
+                let err_msg = format!("agent_judge failed to run: {error}");
+                tool_call_repo::update_result(
+                    &self.pool,
+                    tool_call_storage_id,
+                    &serde_json::json!({ "error": &err_msg }).to_string(),
+                    "failed",
+                )
+                .await
+                .ok();
+                return agent_error_result(err_msg);
+            }
+        };
+
+        // Persist the verdict (atomically flips to complete + judge_passed on pass).
+        let findings_json =
+            serde_json::to_string(&report.findings).unwrap_or_else(|_| "[]".to_string());
+        let recorded = crate::persistence::repo::goal_repo::record_judge_verdict(
+            &self.pool,
+            &goal.id,
+            &self.spec.run_id,
+            report.passed,
+            report.completeness_pct as i64,
+            &findings_json,
+            &report.summary,
+        )
+        .await;
+
+        if let Err(e) = recorded {
+            let err_msg = format!("Failed to persist Judge verdict: {e}");
+            tool_call_repo::update_result(
+                &self.pool,
+                tool_call_storage_id,
+                &serde_json::json!({ "error": &err_msg }).to_string(),
+                "failed",
+            )
+            .await
+            .ok();
+            return agent_error_result(err_msg);
+        }
+
+        // Emit goal events with the freshly updated record.
+        if let Ok(Some(record)) =
+            crate::persistence::repo::goal_repo::find_by_thread_id(&self.pool, &self.spec.thread_id)
+                .await
+        {
+            let payload = crate::core::goal_manager::GoalManager::to_payload(&record);
+            if report.passed {
+                let _ = self.event_tx.send(ThreadStreamEvent::GoalCompleted {
+                    thread_id: record.thread_id.clone(),
+                    evidence: record.evidence.clone().unwrap_or_default(),
+                });
+            }
+            let _ = self.event_tx.send(ThreadStreamEvent::GoalStateUpdated {
+                thread_id: record.thread_id.clone(),
+                goal: Some(payload),
+            });
+        }
+
+        let result_text = crate::core::subagent::judge_contract::render_parent_summary(&report);
+        tool_call_repo::update_result(
+            &self.pool,
+            tool_call_storage_id,
+            &serde_json::json!({ "output": &result_text, "passed": report.passed }).to_string(),
+            "completed",
+        )
+        .await
+        .ok();
+
+        AgentToolResult {
+            content: vec![ContentBlock::Text(TextContent::new(result_text))],
+            details: Some(serde_json::json!({
+                "passed": report.passed,
+                "completenessPct": report.completeness_pct,
+                "findings": report.findings,
+                "summary": report.summary,
+            })),
         }
     }
 }

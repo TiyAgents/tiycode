@@ -27,6 +27,7 @@ impl SurfaceExtension for PromptSurface {
             PromptSurface::MainAgent { run_mode } => SurfacePattern::MainAgent(*run_mode),
             PromptSurface::SubagentExplore { .. } => SurfacePattern::AnySubagent,
             PromptSurface::SubagentReview { .. } => SurfacePattern::AnySubagent,
+            PromptSurface::SubagentJudge { .. } => SurfacePattern::AnySubagent,
             PromptSurface::SubagentCustom { .. } => SurfacePattern::CustomSubagent,
             PromptSurface::Compaction { kind } => SurfacePattern::Compaction(*kind),
             PromptSurface::Title => SurfacePattern::Title,
@@ -43,6 +44,7 @@ impl SurfaceExtension for PromptSurface {
             PromptSurface::MainAgent { .. }
                 | PromptSurface::SubagentExplore { .. }
                 | PromptSurface::SubagentReview { .. }
+                | PromptSurface::SubagentJudge { .. }
                 | PromptSurface::SubagentCustom { .. }
         )
     }
@@ -74,6 +76,9 @@ mod tests {
                 inherited_run_mode: RunMode::Default,
             },
             PromptSurface::SubagentReview {
+                inherited_run_mode: RunMode::Default,
+            },
+            PromptSurface::SubagentJudge {
                 inherited_run_mode: RunMode::Default,
             },
             PromptSurface::SubagentCustom {
