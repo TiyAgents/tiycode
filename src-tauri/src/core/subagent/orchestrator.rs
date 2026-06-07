@@ -1909,7 +1909,7 @@ mod tests {
 
     #[test]
     fn validate_delegation_allows_review_to_explore_at_depth_2() {
-        // Main(1) → review(2): review can delegate, explore.max=3 >= 2.
+        // Main(1) → review(2): review can delegate, explore.max=5 >= 2.
         validate_delegation_capability(
             &SubagentProfile::Review,
             &RuntimeOrchestrationTool::Explore,
@@ -1921,15 +1921,17 @@ mod tests {
 
     #[test]
     fn validate_delegation_rejects_when_child_depth_exceeds_target_max() {
-        // child_depth 4 exceeds explore.max_delegation_depth (3).
+        // Custom target with max=4 cannot be reached at depth 5 (exceeds its config but
+        // still within GLOBAL_MAX_DELEGATION_DEPTH).
+        let target = custom_profile(true, 4);
         let err = validate_delegation_capability(
             &SubagentProfile::Review,
-            &RuntimeOrchestrationTool::Explore,
-            &SubagentProfile::Explore,
-            4,
+            &RuntimeOrchestrationTool::Custom("shallow".to_string()),
+            &target,
+            5,
         )
-        .expect_err("depth 4 must exceed explore max depth 3");
-        assert!(err.contains("max delegation depth is 3"));
+        .expect_err("depth 5 must exceed custom max depth 4");
+        assert!(err.contains("max delegation depth is 4"));
     }
 
     #[test]

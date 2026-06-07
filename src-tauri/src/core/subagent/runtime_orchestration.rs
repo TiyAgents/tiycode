@@ -14,7 +14,7 @@ pub const GLOBAL_MAX_DELEGATION_DEPTH: u32 = 5;
 
 /// Built-in default for the maximum delegation depth a built-in subagent
 /// (explore / review) may be delegated to.
-pub const BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH: u32 = 3;
+pub const BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH: u32 = 5;
 
 pub const TERM_STATUS_TOOL_DESCRIPTION: &str =
     "Inspect the status of the desktop app's embedded Terminal panel session for the current thread. Use this to check that panel's session state without mutating it. It does not inspect the agent runtime, CLI process, or host shell outside the panel.";
@@ -1189,8 +1189,8 @@ mod tests {
 
     #[test]
     fn review_profile_omits_delegation_tools_beyond_builtin_depth() {
-        // child_depth 4 exceeds BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH (3).
-        let tools = SubagentProfile::Review.delegation_tools_for_helper(4, &[]);
+        // child_depth 6 exceeds BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH (5).
+        let tools = SubagentProfile::Review.delegation_tools_for_helper(6, &[]);
         assert!(tools.is_empty());
     }
 
