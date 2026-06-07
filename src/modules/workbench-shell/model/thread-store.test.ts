@@ -42,7 +42,6 @@ function makePendingRun(overrides?: Partial<PendingThreadRun>): PendingThreadRun
     effectivePrompt: "test prompt",
     attachments: [],
     metadata: null,
-    runMode: "default",
     threadId: "thread-1",
     ...overrides,
   };

@@ -1,5 +1,5 @@
 import type { LanguagePreference } from "@/app/providers/language-provider";
-import type { MessageAttachmentDto, RunMode, WorkspaceDto } from "@/shared/types/api";
+import type { MessageAttachmentDto, WorkspaceDto } from "@/shared/types/api";
 import { buildProjectOptionFromPath } from "@/modules/workbench-shell/model/helpers";
 import type {
   ProjectOption,
@@ -188,6 +188,5 @@ export type PendingThreadRun = {
   attachments: MessageAttachmentDto[];
   metadata: Record<string, unknown> | null;
   command?: import("@/modules/workbench-shell/model/composer-commands").ComposerCommandInvocation;
-  runMode: RunMode;
   threadId: string;
 };

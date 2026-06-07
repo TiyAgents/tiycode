@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
-import type { RunMode } from "@/shared/types/api";
 import {
   buildCommandEffectivePrompt,
   buildComposerCommandRegistry,
@@ -9,8 +8,6 @@ import {
   parseCommandArguments,
   parseSlashCommandInput,
 } from "@/modules/workbench-shell/model/composer-commands";
-
-const RUN_MODE: RunMode = "default";
 
 function createMessage(text: string): PromptInputMessage {
   return {
@@ -22,7 +19,7 @@ function createMessage(text: string): PromptInputMessage {
 describe("buildComposerSubmission", () => {
   it("preserves plain multi-line Markdown exactly", () => {
     const text = "  1. First\n2. Second\n\n- Bullet\n```ts\nconst value = 1;\n```\n  ";
-    const submission = buildComposerSubmission(createMessage(text), [], RUN_MODE);
+    const submission = buildComposerSubmission(createMessage(text), []);
 
     expect(submission).not.toBeNull();
     expect(submission?.kind).toBe("plain");
@@ -31,7 +28,7 @@ describe("buildComposerSubmission", () => {
   });
 
   it("rejects whitespace-only messages without attachments", () => {
-    const submission = buildComposerSubmission(createMessage(" \n\t  "), [], RUN_MODE);
+    const submission = buildComposerSubmission(createMessage(" \n\t  "), []);
 
     expect(submission).toBeNull();
   });
@@ -39,7 +36,7 @@ describe("buildComposerSubmission", () => {
   it("parses slash commands from trimmed text while preserving the original display text", () => {
     const registry = buildComposerCommandRegistry([]);
     const text = "  /init  \n";
-    const submission = buildComposerSubmission(createMessage(text), registry, RUN_MODE);
+    const submission = buildComposerSubmission(createMessage(text), registry);
 
     expect(submission).not.toBeNull();
     expect(submission?.kind).toBe("command");
@@ -51,7 +48,7 @@ describe("buildComposerSubmission", () => {
   it("preserves multi-line /goal objectives as command arguments", () => {
     const registry = buildComposerCommandRegistry([]);
     const text = "/goal First goal line\nSecond goal line\n- checklist item";
-    const submission = buildComposerSubmission(createMessage(text), registry, RUN_MODE);
+    const submission = buildComposerSubmission(createMessage(text), registry);
 
     expect(submission).not.toBeNull();
     expect(submission?.kind).toBe("command");

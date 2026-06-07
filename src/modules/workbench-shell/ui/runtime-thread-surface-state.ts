@@ -7,7 +7,6 @@ import type {
   MessageAttachmentDto,
   MessageDto,
   MessagePartDto,
-  RunMode,
   RunSummaryDto,
   ThreadSnapshotDto,
   ToolCallDto,
@@ -279,7 +278,6 @@ export type InitialPromptRequest = {
   effectivePrompt: string;
   attachments: MessageAttachmentDto[];
   metadata: Record<string, unknown> | null;
-  runMode?: RunMode;
 };
 
 export type ThinkingPlaceholder = {
@@ -391,22 +389,6 @@ export function mapRecordedUserMessage(event: RecordedUserMessageEvent): Surface
 }
 
 
-
-export function deriveSelectedRunMode(snapshot: ThreadSnapshotDto, currentMode: RunMode) {
-  if (
-    snapshot.thread.status === "waiting_approval"
-    && !snapshot.activeRun
-    && snapshot.latestRun?.runMode === "plan"
-  ) {
-    return "plan";
-  }
-
-  if (snapshot.activeRun?.runMode === "default" || snapshot.activeRun?.runMode === "plan") {
-    return snapshot.activeRun.runMode;
-  }
-
-  return currentMode;
-}
 
 export function formatApprovalPromptState(state: string, approvedAction: PlanApprovalAction | null, t: (key: TranslationKey) => string) {
   switch (state) {

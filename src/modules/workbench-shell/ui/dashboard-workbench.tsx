@@ -262,7 +262,6 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
 
   const composerValue = useStore(composerStore, (s) => s.newThreadValue);
   const composerError = useStore(composerStore, (s) => s.error);
-  const newThreadRunMode = useStore(composerStore, (s) => s.newThreadRunMode);
   const newThreadReferencedFiles = useStore(composerStore, (s) => s.newThreadReferencedFiles);
   const newThreadAttachmentData = useStore(composerStore, (s) => s.newThreadAttachmentData);
 
@@ -714,7 +713,6 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
 
     void submitNewThread({
       value: trimmedValue,
-      runMode: newThreadRunMode,
       displayText: submission.displayText,
       effectivePrompt,
       attachments: submission.attachments,
