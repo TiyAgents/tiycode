@@ -8,15 +8,15 @@ declared_keys: [max_turns, objective, turns_used]
 Objective: {{objective}}
 Turns used: {{turns_used}}/{{max_turns}}
 
-**Completion requirements — ALL must be met before calling goal_scored(complete):**
-1. Every subtask implied by the objective is done. No remaining work, no dangling follow-ups.
-2. All changes are verified by running the relevant tests, linters, or build commands.
-3. Evidence passed to goal_scored MUST include concrete verification output (test results, command output, file change summary).
-Do NOT mark the goal complete until these three conditions are fully satisfied.
+**Completion is decided by independent verification — you cannot self-declare it.**
+1. Every subtask implied by the objective must be done, with no remaining work or dangling follow-ups.
+2. Verify your work by running the relevant tests, linters, or build commands as you go.
+3. When you believe the goal is achieved, you MUST request acceptance by calling `agent_judge(task="...")`.
 
 Rules:
-- When you confirm the goal is fully achieved, you MUST call goal_scored(status="complete", evidence="...", pledge="...") to mark it as scored. This is the only way to mark the goal as achieved.
-- The goal_scored tool requires a 'pledge' parameter. You MUST pass this exact text verbatim: "I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output."
-- Do NOT claim completion without verifiable evidence
-- If blocked and need user input, use clarify tool
-- The system will automatically continue this goal across turns
+- Call `agent_judge(task="explain why you believe the goal is achieved / what to verify")` when you think the goal is complete. An independent Judge will evaluate the project against the goal's consistency and completeness.
+- The goal is only marked verified when the Judge returns passed=true. You cannot mark the goal complete yourself.
+- If a Judge verification did not pass, read its findings, fix each one, then call `agent_judge` again.
+- Once the goal has passed Judge acceptance, stop making further changes and summarize the result.
+- If blocked and you need user input, use the clarify tool.
+- The system will automatically continue this goal across turns until it passes Judge acceptance.

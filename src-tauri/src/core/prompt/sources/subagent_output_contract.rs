@@ -16,6 +16,9 @@ const EXPLORE_TEMPLATE_EMBEDDED: &str =
 const REVIEW_TEMPLATE_REL_PATH: &str = "subagent/output_contract.review.md";
 const REVIEW_TEMPLATE_EMBEDDED: &str =
     include_str!("../templates/subagent/output_contract.review.md");
+const JUDGE_TEMPLATE_REL_PATH: &str = "subagent/output_contract.judge.md";
+const JUDGE_TEMPLATE_EMBEDDED: &str =
+    include_str!("../templates/subagent/output_contract.judge.md");
 const DECLARED_KEYS: &[&'static str] = &[];
 
 /// Template-backed SectionSource for the SubagentOutputContract section.
@@ -42,6 +45,7 @@ impl SectionSource for SubagentOutputContractSource {
                 (EXPLORE_TEMPLATE_REL_PATH, EXPLORE_TEMPLATE_EMBEDDED)
             }
             Some(SubagentProfile::Review) => (REVIEW_TEMPLATE_REL_PATH, REVIEW_TEMPLATE_EMBEDDED),
+            Some(SubagentProfile::Judge) => (JUDGE_TEMPLATE_REL_PATH, JUDGE_TEMPLATE_EMBEDDED),
             Some(SubagentProfile::Custom { .. }) => {
                 // Custom subagents get a generic output contract
                 return Ok(SectionOutcome::Produced(SectionBody::markdown(

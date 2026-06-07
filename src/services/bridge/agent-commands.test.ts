@@ -366,7 +366,6 @@ function makeGoalPayload(overrides: Partial<GoalPayload> = {}): GoalPayload {
     objective: "Build a todo app",
     status: "active",
     tokensUsed: 0,
-    timeUsedSeconds: 0,
     turnsUsed: 0,
     maxTurns: 50,
     tokenBudget: null,
@@ -606,6 +605,16 @@ describe("goalEvaluate", () => {
 
     const result = await goalEvaluate("thread-1");
     expect(result).toBeNull();
+  });
+
+  it("passes through the skipped verdict for already-accepted goals", async () => {
+    isTauriMock.mockReturnValue(true);
+    const result = makeGoalEvaluateResult({ verdict: "skipped", continuationPrompt: null });
+    invokeMock.mockResolvedValueOnce(result);
+
+    const outcome = await goalEvaluate("thread-1");
+    expect(outcome!.verdict).toBe("skipped");
+    expect(outcome!.continuationPrompt).toBeNull();
   });
 
   it("requires Tauri runtime", async () => {

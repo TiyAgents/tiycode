@@ -2,12 +2,35 @@
 
 import { useCallback, useState } from "react";
 import { goalGetState, goalPause, goalResume, goalClear } from "@/services/bridge/agent-commands";
-import { threadStore, useStore, shallowEqual } from "@/modules/workbench-shell/model/thread-store";
+import { threadStore, useStore, shallowEqual, type GoalStoreState } from "@/modules/workbench-shell/model/thread-store";
 import { useT } from "@/i18n";
 
 type Props = {
   threadId: string;
 };
+
+/**
+ * Resolve the i18n key for the goal status label. Extracted as a pure function
+ * so the `complete` → `verified` (judgePassed) branch can be unit-tested without
+ * mounting the component.
+ */
+export function resolveGoalStatusKey(
+  status: GoalStoreState["status"],
+  judgePassed: GoalStoreState["judgePassed"],
+):
+  | "goal.status.active"
+  | "goal.status.paused"
+  | "goal.status.budgetLimited"
+  | "goal.status.verified"
+  | "goal.status.complete" {
+  switch (status) {
+    case "active": return "goal.status.active";
+    case "paused": return "goal.status.paused";
+    case "budget_limited": return "goal.status.budgetLimited";
+    case "complete": return judgePassed ? "goal.status.verified" : "goal.status.complete";
+    default: return "goal.status.active";
+  }
+}
 
 export function GoalStatusBar({ threadId }: Props) {
   const t = useT();
@@ -30,15 +53,7 @@ export function GoalStatusBar({ threadId }: Props) {
 
   if (!goal) return null;
 
-  const statusKey = (() => {
-    switch (goal.status) {
-      case "active": return "goal.status.active";
-      case "paused": return "goal.status.paused";
-      case "budget_limited": return "goal.status.budgetLimited";
-      case "complete": return "goal.status.complete";
-      default: return "goal.status.active";
-    }
-  })();
+  const statusKey = resolveGoalStatusKey(goal.status, goal.judgePassed);
 
   const statusColor =
     goal.status === "active" ? "bg-blue-500"

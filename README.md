@@ -28,22 +28,22 @@ Around that collaboration model, TiyCode brings together Agent Profiles, workspa
 
 - **AI-first coding collaboration.** TiyCode is designed around the idea that humans express intent through conversation while agents take the lead in execution.
 - **Agent Profiles.** Mix models from different providers, tune response style, language, and custom instructions, and switch profiles flexibly for different kinds of work.
+- **Persistent goal management.** Define long-running objectives for agents to pursue across multiple turns. An independent Judge subagent evaluates completion against actual file changes, command outputs, and commit history — eliminating self-attestation bias.
 - **Custom Agents.** Create purpose-built sub-agents in Settings — each with its own name, system prompt, model tier, and allowed tools — then grant per-profile access and delegate work from the composer.
 - **Three-tier model architecture.** Each profile supports a Primary model for core reasoning, an Auxiliary model for helper tasks, and a Lightweight model for fast operations — with automatic fallback chains across tiers.
 - **Multi-provider support.** Connect to 13+ LLM providers out of the box — OpenAI, Anthropic, Google, Ollama, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi, and more — or add any OpenAI-compatible endpoint as a custom provider.
 - **Workspace-centered execution.** Threads stay grounded in the local workspace and connect naturally to code review, version control, repository inspection, Git worktrees, and terminal workflows.
 - **Task-aware execution.** Thread-scoped task boards, plan checkpoints, tool status events, and subagent progress make longer runs easier to follow and review.
-- **Persistent goal management.** Set long-running objectives for agents to pursue across multiple turns, with automatic continuation, budget controls, and progress tracking.
+- **Real-time execution streaming.** A rich thread stream event system delivers live updates — message deltas, tool calls, requested/active statuses, reasoning steps, subagent progress, and plan updates — all rendered through purpose-built AI Elements components.
 - **Rich composer inputs.** Prompt input supports text, file/photo attachments, screenshots, slash command structured argument interpolation (`--key=value`, positional args, `{{placeholder}}` templates), and large-paste handling.
 - **Steer & Queue.** While the agent is running, choose to steer the conversation mid-execution or queue a follow-up message for the next round — keeping you in control without interrupting the workflow.
-- **Real-time execution streaming.** A rich thread stream event system delivers live updates — message deltas, tool calls, requested/active statuses, reasoning steps, subagent progress, and plan updates — all rendered through purpose-built AI Elements components.
-- **Operator-friendly experience.** Slash commands with structured argument parsing, smart conversation titles, context compression controls, commit message generation, external terminal handoff including Ghostty, and compact workbench controls help the product feel fast and practical in day-to-day use.
-- **Thread-level elapsed timer.** Track active execution time per thread, excluding pauses, with persistent tracking across sessions.
-- **Bilingual interface.** Full i18n coverage with English and Simplified Chinese, switchable at any time.
+- **Extensible by design.** Plugins, MCP servers, and Skills are treated as first-class building blocks through the `Extensions Center`.
 - **ACP Server support.** TiyCode can run as a headless ACP (Agent Client Protocol) server via `tiycode acp --stdio` or `tiycode acp --http <addr>`, letting external tools and IDE plugins drive the agent runtime through a standard JSON-RPC protocol without the desktop GUI.
 - **IM channel gateway.** Connect TiyCode to WeChat or WeCom so you can chat with the agent directly from your messaging app — scan a QR code to log in, send messages and attachments, and receive streaming responses without opening the desktop GUI.
-- **Extensible by design.** Plugins, MCP servers, and Skills are treated as first-class building blocks through the `Extensions Center`.
+- **Operator-friendly experience.** Slash commands with structured argument parsing, smart conversation titles, context compression controls, commit message generation, external terminal handoff including Ghostty, and compact workbench controls help the product feel fast and practical in day-to-day use.
+- **Thread-level elapsed timer.** Track active execution time per thread, excluding pauses, with persistent tracking across sessions.
 - **Built-in runtime path.** The main execution flow is `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`.
+- **Bilingual interface.** Full i18n coverage with English and Simplified Chinese, switchable at any time.
 
 ## Tech Stack
 

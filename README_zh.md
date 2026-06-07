@@ -28,22 +28,22 @@ TiyCode 面向的是希望以 AI 时代的方式进行编码协作的用户。�
 
 - **AI First 的编码协作。** TiyCode 围绕"通过对话表达意图，Agent 全面执行"这一理念来设计产品形态。
 - **Agent Profile。** 支持自由组合不同服务商的模型，并可配置回复风格、回复语言、自定义指令等设定，且能在不同 Profile 之间灵活切换。
+- **持久化目标管理。** 为 Agent 设置跨轮次的长期目标，由独立的 Judge 验收 Agent 基于实际文件变更、命令输出和提交历史进行完成判定——杜绝"自说自话"的信任缺陷。
 - **Custom Agents。** 在设置中心创建专用子 Agent——每个拥有独立的名称、系统提示、模型层级和可用工具——按 Profile 授权后即可从 composer 委派任务。
 - **三层模型架构。** 每个 Profile 支持配置 Primary 主力模型、Auxiliary 辅助模型和 Lightweight 轻量模型三个层级，层级之间具备自动回退链路。
 - **多服务商接入。** 开箱支持 13+ 家 LLM 服务商 —— OpenAI、Anthropic、Google、Ollama、xAI、Groq、OpenRouter、DeepSeek、MiniMax、Kimi 等，也可将任何 OpenAI 兼容端点作为自定义 Provider 接入。
 - **以工作区为中心的执行体验。** 对话线程扎根本地工作区，并与代码审阅、版本控制、仓库状态读取、Git worktree 和 Terminal 工作流自然衔接。
 - **面向任务的执行可观测性。** Thread 级任务板、Plan checkpoint、工具状态事件和子 Agent 进度让长任务更容易跟踪和复查。
-- **持久化目标管理。** 为 Agent 设置跨轮次的长期目标，支持自动延续、预算控制和进度跟踪。
+- **实时执行流式推送。** 丰富的 Thread Stream 事件体系支撑实时更新 —— 消息增量、工具调用、requested / active 状态、推理步骤、子 Agent 进度与计划更新。
 - **更丰富的输入能力。** Prompt 输入支持文本、文件 / 图片附件、截图、Slash Command 结构化参数插值（`--key=value`、位置参数、`{{placeholder}}` 模板变量）以及大段文本粘贴处理。
 - **Steer 与 Queue。** Agent 运行中可选择「引导」即时插入消息调整方向，或「排队」将消息留待当前运行结束后再发起下一轮——无需中断工作流即可保持掌控。
-- **实时执行流式推送。** 丰富的 Thread Stream 事件体系支撑实时更新 —— 消息增量、工具调用、requested / active 状态、推理步骤、子 Agent 进度与计划更新。
-- **更友好的日常体验。** 支持结构化参数解析的 Slash Command、智能会话标题、上下文压缩、Commit Message 生成、包含 Ghostty 在内的外部终端衔接以及紧凑工作台控件，让协作过程更顺手、更连贯。
-- **线程级别耗时计时器。** 跟踪每个线程的活跃执行时间，排除暂停时间，并支持跨会话持久化跟踪。
-- **双语界面。** 完整的 i18n 支持，覆盖英文和简体中文，随时可切换。
+- **良好的通用扩展能力。** Plugins、MCP Servers 与 Skills 通过 `Extensions Center` 形成统一的扩展入口与产品模型。
 - **ACP Server 支持。** TiyCode 可作为无头 ACP（Agent Client Protocol）服务器运行，通过 `tiycode acp --stdio` 或 `tiycode acp --http <addr>` 启动，让外部工具和 IDE 插件通过标准 JSON-RPC 协议驱动 Agent 运行时，无需启动桌面 GUI。
 - **IM 通道网关。** 将 TiyCode 接入微信或企业微信，扫码登录后即可在聊天应用中直接与 Agent 对话——发送消息和附件、接收流式回复，无需打开桌面 GUI。
-- **良好的通用扩展能力。** Plugins、MCP Servers 与 Skills 通过 `Extensions Center` 形成统一的扩展入口与产品模型。
+- **更友好的日常体验。** 支持结构化参数解析的 Slash Command、智能会话标题、上下文压缩、Commit Message 生成、包含 Ghostty 在内的外部终端衔接以及紧凑工作台控件，让协作过程更顺手、更连贯。
+- **线程级别耗时计时器。** 跟踪每个线程的活跃执行时间，排除暂停时间，并支持跨会话持久化跟踪。
 - **内置 Runtime。** 主执行链路 `Frontend -> Rust Core -> BuiltInAgentRuntime -> tiycore -> LLM`。
+- **双语界面。** 完整的 i18n 支持，覆盖英文和简体中文，随时可切换。
 
 ## 技术栈
 

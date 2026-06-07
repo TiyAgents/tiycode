@@ -223,9 +223,10 @@ pub enum ThreadStreamEvent {
         error: Option<String>,
     },
     // ── Goal events ──
-    // GoalStateUpdated and GoalCompleted are emitted by execute_goal_tool
-    // (create_goal, goal_scored tools in AgentSession). GoalContinuation and
-    // GoalPaused are emitted by backend run-lifecycle goal orchestration after
+    // GoalStateUpdated and GoalCompleted are emitted by the agent_judge
+    // acceptance flow (execute_judge_tool in AgentSession) when the Judge
+    // records a verdict. GoalContinuation and GoalPaused are emitted by backend
+    // run-lifecycle goal orchestration after
     // terminal runs are evaluated. The frontend also consumes goal state via
     // goal_get_state / goal_evaluate command APIs.
     GoalStateUpdated {

@@ -19,12 +19,6 @@ pub struct GoalEvaluationOutcome {
 /// Default maximum turns for a goal before auto-pausing.
 const DEFAULT_MAX_TURNS: i64 = 50;
 
-/// Tool name used to mark a goal as fully achieved ("score" the goal).
-pub const GOAL_SCORED_TOOL_NAME: &str = "goal_scored";
-
-/// Exact pledge text the agent must pass verbatim when calling `goal_scored`.
-pub const GOAL_SCORED_PLEDGE: &str = "I hereby declare: I confirm that I have fully achieved this goal, and I have confirmed that there are no remaining pending tasks or follow-up items. I confirm that I have repeatedly reviewed the output of this work, and I take responsibility for the quality of this output.";
-
 /// Continuation prompt injected when the goal is still active.
 const CONTINUATION_PROMPT_TEMPLATE: &str = "\
 [Goal continuation — turns {turns_used}/{max_turns}]
@@ -33,26 +27,28 @@ const CONTINUATION_PROMPT_TEMPLATE: &str = "\
 
 Continue working toward this objective. Take the next concrete step.
 
-⚠️ When the goal is fully achieved, you MUST call:
-  goal_scored(status=\"complete\", evidence=\"<verifiable proof>\", pledge=\"<exact required pledge>\")
-Without this call, the system will keep injecting continuation prompts.
+⚠️ Completion is now decided by independent verification. When you believe the
+goal is achieved, you MUST call:
+  agent_judge(task=\"explain why you believe the goal is achieved / what to verify\")
+A Judge will evaluate whether the project satisfies the goal's consistency and
+completeness.
+- The goal is only marked verified when the Judge returns passed=true.
+- If a previous Judge verification did not pass, read its findings, fix each one,
+  then call agent_judge again.
+You cannot declare completion yourself; only a passing Judge verdict counts.
 
 If you are blocked and need user input, use the clarify tool.";
 
-/// Challenge prompt when the model claimed completion but did not use the tool.
+/// Challenge prompt when the model claimed completion but has not requested
+/// Judge verification yet.
 const CHALLENGE_EVIDENCE_PROMPT: &str = "\
-Before claiming the goal is complete, please provide concrete evidence:
+You appear to believe the goal is complete, but you have not requested independent
+verification. You cannot self-declare completion.
 
-1. What verification commands did you run? What was the output?
-2. What files did you modify? What was the purpose of each change?
-
-Once you have evidence, call goal_scored(status=\"complete\", evidence=\"...\", pledge=\"...\") .
-If the goal is not actually complete, ignore this prompt and continue working.";
-
-/// Challenge prompt when the model claimed completion but evidence was empty.
-const MISSING_EVIDENCE_PROMPT: &str = "\
-You called goal_scored(complete) but did not provide evidence.
-Please provide completion evidence and call goal_scored(status=\"complete\", evidence=\"<your evidence>\", pledge=\"<exact required pledge>\") again.";
+When you are confident the goal is achieved, call:
+  agent_judge(task=\"explain why you believe the goal is achieved / what to verify\")
+The goal is only marked verified when the Judge returns passed=true. If the goal
+is not actually complete, ignore this prompt and continue working.";
 
 /// Guidance prompt when the agent appears stuck.
 const GUIDANCE_PROMPT: &str = "\
@@ -152,13 +148,17 @@ impl GoalManager {
             status: GoalStatus::Active,
             token_budget,
             tokens_used: 0,
-            time_used_seconds: 0,
             turns_used: 0,
             max_turns: DEFAULT_MAX_TURNS,
             pause_reason: None,
             pause_detail: None,
             evidence: None,
             last_evaluated_run_id: None,
+            judge_passed: false,
+            judge_completeness: None,
+            judge_findings: None,
+            judge_summary: None,
+            judge_evaluated_run_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -212,29 +212,6 @@ impl GoalManager {
         Ok(())
     }
 
-    /// Mark the goal as complete with evidence.
-    pub async fn mark_complete(&self, goal_id: &str, evidence: &str) -> Result<(), AppError> {
-        if evidence.trim().is_empty() {
-            return Err(AppError::validation(
-                ErrorSource::Settings,
-                "evidence is required to mark a goal as complete",
-            ));
-        }
-        let updated = goal_repo::update_status(
-            &self.pool,
-            goal_id,
-            GoalStatus::Complete,
-            None,
-            None,
-            Some(evidence),
-        )
-        .await?;
-        if !updated {
-            return Err(AppError::not_found(ErrorSource::Settings, "goal"));
-        }
-        Ok(())
-    }
-
     /// Mark the goal as budget-limited.
     pub async fn mark_budget_limited(&self, goal_id: &str) -> Result<(), AppError> {
         let updated = goal_repo::update_status(
@@ -273,14 +250,9 @@ impl GoalManager {
         goal_repo::delete_by_thread_id(&self.pool, &self.thread_id).await
     }
 
-    /// Account usage after a turn. Increments turn count, tokens, and time.
-    pub async fn account_usage(
-        &self,
-        goal_id: &str,
-        tokens: i64,
-        time_seconds: i64,
-    ) -> Result<(), AppError> {
-        goal_repo::account_usage(&self.pool, goal_id, tokens, time_seconds, 1).await
+    /// Account usage after a turn. Increments turn count and tokens.
+    pub async fn account_usage(&self, goal_id: &str, tokens: i64) -> Result<(), AppError> {
+        goal_repo::account_usage(&self.pool, goal_id, tokens, 1).await
     }
 
     // ── Auto-resume ──
@@ -353,7 +325,7 @@ impl GoalManager {
                         .remove(&self.thread_id);
                     return GoalVerdict::Paused {
                         reason: PauseReason::IdleBlocked,
-                        detail: Some("agent repeatedly claimed completion without providing evidence via goal_scored".into()),
+                        detail: Some("agent repeatedly claimed completion without requesting Judge verification via agent_judge".into()),
                     };
                 }
                 return GoalVerdict::ChallengeEvidence;
@@ -412,11 +384,11 @@ impl GoalManager {
                         detail: Some("agent published a plan, awaiting approval".into()),
                     });
                 }
-                // goal_scored is handled by the tool execution pipeline
-                // (agent_session_execution) which validates pledge/evidence
-                // and marks the goal complete.  Evaluation should not
-                // interfere — let it pass through to idle reset and budget
-                // checks.
+                // agent_judge is the main-agent-only acceptance request. It is
+                // handled by the tool execution pipeline (execute_judge_tool),
+                // which runs the Judge and records the verdict. Evaluation must
+                // not treat it as a blocking tool — like any tool call it shows
+                // the agent acted and should reset idle tendencies.
                 _ => {}
             }
         }
@@ -486,20 +458,44 @@ impl GoalManager {
 
     // ── Prompt generation ──
 
-    /// Generate the continuation prompt for the next turn.
+    /// Generate the continuation prompt for the next turn. When a prior Judge
+    /// verification did not pass, the most recent findings are appended so the
+    /// agent can fix them before re-requesting verification.
     pub fn render_continuation_prompt(&self, goal: &GoalRecord) -> String {
-        CONTINUATION_PROMPT_TEMPLATE
+        let mut prompt = CONTINUATION_PROMPT_TEMPLATE
             .replace("{objective}", &goal.objective)
             .replace("{turns_used}", &goal.turns_used.to_string())
-            .replace("{max_turns}", &goal.max_turns.to_string())
+            .replace("{max_turns}", &goal.max_turns.to_string());
+
+        if goal.judge_evaluated_run_id.is_some() && !goal.judge_passed {
+            if let Some(findings_json) = goal.judge_findings.as_deref() {
+                if let Ok(findings) = serde_json::from_str::<Vec<String>>(findings_json) {
+                    let findings: Vec<String> = findings
+                        .into_iter()
+                        .filter(|f| !f.trim().is_empty())
+                        .take(10)
+                        .collect();
+                    if !findings.is_empty() {
+                        prompt.push_str(
+                            "\n\nMost recent Judge findings to address before re-verifying:",
+                        );
+                        for finding in findings {
+                            let trimmed = finding.trim();
+                            let truncated: String = trimmed.chars().take(500).collect();
+                            prompt.push_str(&format!("\n- {truncated}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        prompt
     }
 
-    /// Generate a challenge-evidence prompt when the model failed to provide evidence.
-    pub fn render_challenge_prompt(&self, variant: ChallengePromptVariant) -> String {
-        match variant {
-            ChallengePromptVariant::NoEvidence => MISSING_EVIDENCE_PROMPT.to_string(),
-            ChallengePromptVariant::NoTool => CHALLENGE_EVIDENCE_PROMPT.to_string(),
-        }
+    /// Generate a challenge prompt nudging the agent to request Judge
+    /// verification when it claims completion without calling `agent_judge`.
+    pub fn render_challenge_prompt(&self) -> String {
+        CHALLENGE_EVIDENCE_PROMPT.to_string()
     }
 
     /// Generate a guidance prompt when the agent appears stuck.
@@ -517,7 +513,18 @@ impl GoalManager {
             None => return Ok(None),
         };
 
+        // Acceptance is now decided exclusively by the Judge: a verified goal is
+        // `Complete && judge_passed`. Any non-Active goal stops continuation,
+        // preserving existing pause/budget semantics. The legacy combination
+        // `Complete && !judge_passed` should not occur after migration backfill;
+        // if it does, log it and still stop continuation rather than re-opening.
         if goal.status != GoalStatus::Active {
+            if goal.status == GoalStatus::Complete && !goal.judge_passed {
+                tracing::warn!(
+                    goal_id = %goal.id,
+                    "goal is Complete without judge_passed; treating as terminal and not re-opening"
+                );
+            }
             return Ok(Some(GoalEvaluationOutcome {
                 goal: Self::to_payload(&goal),
                 verdict: "skipped".to_string(),
@@ -594,23 +601,21 @@ impl GoalManager {
             GoalVerdict::BudgetLimited => {
                 self.mark_budget_limited(&current.id).await?;
             }
-            GoalVerdict::Complete { .. } => {}
         }
 
+        // Bump goal turn counter for any run that did real work. We still consult
+        // run duration to filter out zero-work runs (e.g. an immediately-interrupted
+        // run shouldn't burn a turn against max_turns); active running time is
+        // tracked separately on thread_runs.elapsed_running_secs and is no longer
+        // billed against the goal here.
         if let Some(run_seconds) =
             crate::persistence::repo::run_repo::get_run_duration(&self.pool, run_id)
                 .await
                 .unwrap_or(None)
         {
-            let paused_seconds = self.lock_runtime().take_run_paused_seconds(run_id).max(0);
-            let billable_seconds = (run_seconds - paused_seconds).max(0);
-            if billable_seconds > 0 {
-                self.account_usage(&current.id, 0, billable_seconds)
-                    .await
-                    .ok();
+            if run_seconds > 0 {
+                self.account_usage(&current.id, 0).await.ok();
             }
-        } else {
-            self.lock_runtime().take_run_paused_seconds(run_id);
         }
 
         let updated = self.get_active().await?;
@@ -626,11 +631,14 @@ impl GoalManager {
             ),
             GoalVerdict::ChallengeEvidence => (
                 "challenge_evidence",
-                Some(self.render_challenge_prompt(ChallengePromptVariant::NoTool)),
+                Some(format!(
+                    "{}\n\n{}",
+                    self.render_challenge_prompt(),
+                    self.render_continuation_prompt(updated.as_ref().unwrap_or(&goal))
+                )),
             ),
             GoalVerdict::Paused { reason: _, detail } => ("paused", detail.clone()),
             GoalVerdict::BudgetLimited => ("budget_limited", None),
-            GoalVerdict::Complete { .. } => ("complete", None),
         };
 
         Ok(Some(GoalEvaluationOutcome {
@@ -639,12 +647,4 @@ impl GoalManager {
             continuation_prompt,
         }))
     }
-}
-
-/// Variants for challenge prompts.
-pub enum ChallengePromptVariant {
-    /// Model called goal_scored(complete) but evidence was empty.
-    NoEvidence,
-    /// Model claimed completion in text but didn't use the tool.
-    NoTool,
 }

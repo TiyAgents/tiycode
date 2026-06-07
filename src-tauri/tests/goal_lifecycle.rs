@@ -3,7 +3,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
     use std::str::FromStr;
     use tiycode_lib::core::app_state::GoalRuntimeState;
-    use tiycode_lib::core::goal_manager::{ChallengePromptVariant, GoalManager};
+    use tiycode_lib::core::goal_manager::GoalManager;
     use tiycode_lib::model::goal::{GoalStatus, GoalVerdict, PauseReason};
     use tiycode_lib::persistence::repo::goal_repo;
 
@@ -138,7 +138,6 @@ mod tests {
 
         let after_first = mgr.get_active().await.unwrap().unwrap();
         assert_eq!(after_first.turns_used, goal.turns_used + 1);
-        assert_eq!(after_first.time_used_seconds, 42);
         assert_eq!(after_first.last_evaluated_run_id.as_deref(), Some("run-1"));
 
         let second = mgr
@@ -150,10 +149,6 @@ mod tests {
 
         let after_second = mgr.get_active().await.unwrap().unwrap();
         assert_eq!(after_second.turns_used, after_first.turns_used);
-        assert_eq!(
-            after_second.time_used_seconds,
-            after_first.time_used_seconds
-        );
     }
 
     #[tokio::test]
@@ -233,7 +228,7 @@ mod tests {
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Set turns_used to at least max_turns via account_usage
-        goal_repo::account_usage(&pool, &goal.id, 0, 0, goal.max_turns)
+        goal_repo::account_usage(&pool, &goal.id, 0, goal.max_turns)
             .await
             .unwrap();
 
@@ -258,7 +253,7 @@ mod tests {
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
-        // Model says "done" but doesn't call goal_scored
+        // Model says "done" but doesn't call agent_judge
         let verdict = mgr.evaluate_after_turn(
             "All done! The goal is complete and everything is finished.",
             &goal,
@@ -321,24 +316,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_complete_with_evidence() {
-        let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
-        let goal = mgr.create_goal("Test goal", None).await.unwrap();
-
-        mgr.mark_complete(&goal.id, "All tests pass, files created")
-            .await
-            .unwrap();
-
-        let completed = mgr.get_active().await.unwrap().unwrap();
-        assert_eq!(completed.status, GoalStatus::Complete);
-        assert_eq!(
-            completed.evidence.as_deref(),
-            Some("All tests pass, files created")
-        );
-    }
-
-    #[tokio::test]
     async fn mark_budget_limited() {
         let pool = setup_pool().await;
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
@@ -371,42 +348,17 @@ mod tests {
 
         let prompt = mgr.render_continuation_prompt(&goal);
         assert!(prompt.contains("Build feature X"));
-        assert!(prompt.contains("goal_scored"));
+        assert!(prompt.contains("agent_judge"));
         assert!(prompt.contains("clarify"));
     }
 
     #[tokio::test]
-    async fn challenge_prompt_renders_variants() {
+    async fn challenge_prompt_guides_to_judge() {
         let mgr = GoalManager::new(setup_pool().await, "thread-1".into(), test_runtime());
 
-        let no_evidence = mgr.render_challenge_prompt(ChallengePromptVariant::NoEvidence);
-        assert!(no_evidence.contains("did not provide evidence"));
-
-        let no_tool = mgr.render_challenge_prompt(ChallengePromptVariant::NoTool);
-        assert!(no_tool.contains("provide concrete evidence"));
-        assert!(no_tool.contains("goal_scored"));
-    }
-
-    // ── #1 / #8: Tests for goal_scored validation logic & test gap coverage ──
-
-    #[tokio::test]
-    async fn mark_complete_rejects_empty_evidence() {
-        let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
-        let goal = mgr.create_goal("Test goal", None).await.unwrap();
-
-        let err = mgr.mark_complete(&goal.id, "").await.unwrap_err();
-        assert!(err.user_message.contains("evidence is required"));
-    }
-
-    #[tokio::test]
-    async fn mark_complete_rejects_whitespace_only_evidence() {
-        let pool = setup_pool().await;
-        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
-        let goal = mgr.create_goal("Test goal", None).await.unwrap();
-
-        let err = mgr.mark_complete(&goal.id, "   ").await.unwrap_err();
-        assert!(err.user_message.contains("evidence is required"));
+        let prompt = mgr.render_challenge_prompt();
+        assert!(prompt.contains("agent_judge"));
+        assert!(prompt.contains("cannot self-declare"));
     }
 
     #[tokio::test]
@@ -416,7 +368,7 @@ mod tests {
         let goal = mgr.create_goal("Test goal", Some(500)).await.unwrap();
 
         // Accumulate tokens to reach the budget
-        goal_repo::account_usage(&pool, &goal.id, 500, 0, 0)
+        goal_repo::account_usage(&pool, &goal.id, 500, 0)
             .await
             .unwrap();
 
@@ -456,15 +408,133 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluate_after_turn_goal_scored_not_blocking() {
+    async fn evaluate_after_turn_agent_judge_not_blocking() {
         let pool = setup_pool().await;
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
-        // goal_scored should NOT trigger a pause in evaluation
-        mgr.record_tool_call("goal_scored");
-        let verdict = mgr.evaluate_after_turn("Calling goal_scored", &goal);
+        // agent_judge should NOT trigger a pause in evaluation
+        mgr.record_tool_call("agent_judge");
+        let verdict = mgr.evaluate_after_turn("Calling agent_judge", &goal);
         assert!(matches!(verdict, GoalVerdict::Continue));
+    }
+
+    // ── Judge verdict persistence (record_judge_verdict) ──
+
+    #[tokio::test]
+    async fn record_judge_verdict_pass_marks_complete_and_verified() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        let recorded = goal_repo::record_judge_verdict(
+            &pool,
+            &goal.id,
+            "run-judge-1",
+            true,
+            100,
+            "[]",
+            "All requirements verified; tests pass.",
+        )
+        .await
+        .unwrap();
+        assert!(recorded);
+
+        let updated = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(updated.status, GoalStatus::Complete);
+        assert!(updated.judge_passed);
+        assert_eq!(updated.judge_completeness, Some(100));
+        assert_eq!(
+            updated.evidence.as_deref(),
+            Some("All requirements verified; tests pass.")
+        );
+        assert_eq!(
+            updated.judge_evaluated_run_id.as_deref(),
+            Some("run-judge-1")
+        );
+
+        // A verified goal stops continuation.
+        let outcome = mgr
+            .evaluate_after_run("run-after", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.verdict, "skipped");
+        assert!(outcome.continuation_prompt.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_judge_verdict_fail_keeps_active_and_persists_findings() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+
+        let findings = serde_json::to_string(&vec![
+            "Missing unit tests for module X".to_string(),
+            "Build fails on Windows".to_string(),
+        ])
+        .unwrap();
+        let recorded = goal_repo::record_judge_verdict(
+            &pool,
+            &goal.id,
+            "run-judge-1",
+            false,
+            60,
+            &findings,
+            "Not yet complete.",
+        )
+        .await
+        .unwrap();
+        assert!(recorded);
+
+        let updated = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(updated.status, GoalStatus::Active);
+        assert!(!updated.judge_passed);
+        assert!(updated.judge_findings.is_some());
+
+        // Continuation prompt should surface the latest findings.
+        let prompt = mgr.render_continuation_prompt(&updated);
+        assert!(prompt.contains("Missing unit tests for module X"));
+        assert!(prompt.contains("agent_judge"));
+    }
+
+    #[tokio::test]
+    async fn migration_backfills_legacy_complete_goal_as_verified() {
+        let pool = setup_pool().await;
+        let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
+        let goal = mgr.create_goal("Legacy goal", None).await.unwrap();
+
+        // Simulate a legacy completed goal (no judge fields set yet).
+        sqlx::query(
+            "UPDATE goals SET status = 'complete', evidence = 'legacy evidence' WHERE id = ?",
+        )
+        .bind(&goal.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Apply the same backfill the migration performs.
+        sqlx::query(
+            "UPDATE goals SET judge_passed = 1, \
+             judge_summary = COALESCE(judge_summary, evidence), \
+             judge_completeness = COALESCE(judge_completeness, 100) \
+             WHERE status = 'complete'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let updated = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(updated.status, GoalStatus::Complete);
+        assert!(updated.judge_passed);
+        assert_eq!(updated.judge_completeness, Some(100));
+
+        // It must not be re-opened by continuation.
+        let outcome = mgr
+            .evaluate_after_run("run-after", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.verdict, "skipped");
     }
 
     #[tokio::test]

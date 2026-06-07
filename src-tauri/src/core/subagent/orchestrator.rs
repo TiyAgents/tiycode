@@ -1127,6 +1127,15 @@ impl HelperDelegationContext {
             RuntimeOrchestrationTool::Parallel => {
                 return Err("agent_parallel cannot be used as an individual helper".to_string());
             }
+            RuntimeOrchestrationTool::Judge => {
+                // Hard gate: agent_judge is a main-agent-only tool. A subagent
+                // (including Judge itself) must never recursively request goal
+                // acceptance, even if the tool name was parsed successfully.
+                return Err(
+                    "agent_judge can only be called by the main agent for the current goal"
+                        .to_string(),
+                );
+            }
             RuntimeOrchestrationTool::Custom(slug) => {
                 crate::core::agent_session_tools::resolve_custom_subagent_profile_from_pool(
                     &self.orchestrator.pool,
@@ -1470,6 +1479,9 @@ async fn build_helper_system_prompt(
             inherited_run_mode: rm,
         },
         SubagentProfile::Review => PromptSurface::SubagentReview {
+            inherited_run_mode: rm,
+        },
+        SubagentProfile::Judge => PromptSurface::SubagentJudge {
             inherited_run_mode: rm,
         },
         SubagentProfile::Custom { slug, .. } => PromptSurface::SubagentCustom {
@@ -1897,7 +1909,7 @@ mod tests {
 
     #[test]
     fn validate_delegation_allows_review_to_explore_at_depth_2() {
-        // Main(1) → review(2): review can delegate, explore.max=3 >= 2.
+        // Main(1) → review(2): review can delegate, explore.max=5 >= 2.
         validate_delegation_capability(
             &SubagentProfile::Review,
             &RuntimeOrchestrationTool::Explore,
@@ -1909,15 +1921,17 @@ mod tests {
 
     #[test]
     fn validate_delegation_rejects_when_child_depth_exceeds_target_max() {
-        // child_depth 4 exceeds explore.max_delegation_depth (3).
+        // Custom target with max=4 cannot be reached at depth 5 (exceeds its config but
+        // still within GLOBAL_MAX_DELEGATION_DEPTH).
+        let target = custom_profile(true, 4);
         let err = validate_delegation_capability(
             &SubagentProfile::Review,
-            &RuntimeOrchestrationTool::Explore,
-            &SubagentProfile::Explore,
-            4,
+            &RuntimeOrchestrationTool::Custom("shallow".to_string()),
+            &target,
+            5,
         )
-        .expect_err("depth 4 must exceed explore max depth 3");
-        assert!(err.contains("max delegation depth is 3"));
+        .expect_err("depth 5 must exceed custom max depth 4");
+        assert!(err.contains("max delegation depth is 4"));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveGoalStatusKey } from "./goal-status-bar";
 
 const source = await import("./goal-status-bar?raw").then((module) => module.default as string);
 
@@ -19,5 +20,25 @@ describe("GoalStatusBar layout contract", () => {
     expect(source).not.toContain("useThreadElapsedTimer");
     expect(source).not.toContain("goal.time.elapsed");
     expect(source).not.toContain("goal.time.hoursMinutes");
+  });
+});
+
+describe("resolveGoalStatusKey", () => {
+  it("maps non-complete statuses to their own keys", () => {
+    expect(resolveGoalStatusKey("active", undefined)).toBe("goal.status.active");
+    expect(resolveGoalStatusKey("paused", undefined)).toBe("goal.status.paused");
+    expect(resolveGoalStatusKey("budget_limited", undefined)).toBe("goal.status.budgetLimited");
+  });
+
+  it("shows the verified label only when a complete goal passed Judge acceptance", () => {
+    expect(resolveGoalStatusKey("complete", true)).toBe("goal.status.verified");
+  });
+
+  it("falls back to the plain complete label when judge has not passed", () => {
+    expect(resolveGoalStatusKey("complete", false)).toBe("goal.status.complete");
+  });
+
+  it("treats an undefined judgePassed as not verified", () => {
+    expect(resolveGoalStatusKey("complete", undefined)).toBe("goal.status.complete");
   });
 });

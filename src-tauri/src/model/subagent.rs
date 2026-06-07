@@ -137,7 +137,7 @@ pub struct ProfileSubagentAccessRecord {
 // Reserved slugs that cannot be used for custom subagents
 // ---------------------------------------------------------------------------
 
-pub const RESERVED_SUBAGENT_SLUGS: &[&str] = &["explore", "review"];
+pub const RESERVED_SUBAGENT_SLUGS: &[&str] = &["explore", "review", "judge"];
 
 /// Validate that a slug is well-formed and not reserved.
 pub fn validate_slug(slug: &str) -> Result<(), &'static str> {

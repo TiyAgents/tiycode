@@ -98,10 +98,9 @@ impl PauseReason {
 pub enum GoalVerdict {
     /// Goal is still active — inject continuation prompt
     Continue,
-    /// Model claimed completion but evidence is missing — inject challenge
+    /// Model claimed completion but has not yet requested Judge verification —
+    /// inject a challenge nudging it to call `agent_judge`.
     ChallengeEvidence,
-    /// Goal achieved with evidence
-    Complete { evidence: String },
     /// Goal paused for a specific reason
     Paused {
         reason: PauseReason,
@@ -120,13 +119,22 @@ pub struct GoalRecord {
     pub status: GoalStatus,
     pub token_budget: Option<i64>,
     pub tokens_used: i64,
-    pub time_used_seconds: i64,
     pub turns_used: i64,
     pub max_turns: i64,
     pub pause_reason: Option<PauseReason>,
     pub pause_detail: Option<String>,
     pub evidence: Option<String>,
     pub last_evaluated_run_id: Option<String>,
+    /// Whether the most recent Judge verdict passed acceptance.
+    pub judge_passed: bool,
+    /// Latest Judge completeness percentage (0-100), if evaluated.
+    pub judge_completeness: Option<i64>,
+    /// Latest Judge findings as a JSON array string, if evaluated.
+    pub judge_findings: Option<String>,
+    /// Latest Judge summary / acceptance rationale, if evaluated.
+    pub judge_summary: Option<String>,
+    /// Run id of the run during which the latest Judge verdict was recorded.
+    pub judge_evaluated_run_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -142,7 +150,6 @@ pub struct GoalDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<i64>,
     pub tokens_used: i64,
-    pub time_used_seconds: i64,
     pub turns_used: i64,
     pub max_turns: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -153,6 +160,15 @@ pub struct GoalDto {
     pub evidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_evaluated_run_id: Option<String>,
+    pub judge_passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_completeness: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_findings: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_evaluated_run_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -166,13 +182,17 @@ impl From<GoalRecord> for GoalDto {
             status: r.status,
             token_budget: r.token_budget,
             tokens_used: r.tokens_used,
-            time_used_seconds: r.time_used_seconds,
             turns_used: r.turns_used,
             max_turns: r.max_turns,
             pause_reason: r.pause_reason,
             pause_detail: r.pause_detail,
             evidence: r.evidence,
             last_evaluated_run_id: r.last_evaluated_run_id,
+            judge_passed: r.judge_passed,
+            judge_completeness: r.judge_completeness,
+            judge_findings: r.judge_findings,
+            judge_summary: r.judge_summary,
+            judge_evaluated_run_id: r.judge_evaluated_run_id,
             created_at: r.created_at.to_rfc3339(),
             updated_at: r.updated_at.to_rfc3339(),
         }
@@ -195,7 +215,6 @@ pub struct GoalPayload {
     pub objective: String,
     pub status: GoalStatus,
     pub tokens_used: i64,
-    pub time_used_seconds: i64,
     pub turns_used: i64,
     pub max_turns: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,6 +227,15 @@ pub struct GoalPayload {
     pub evidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_evaluated_run_id: Option<String>,
+    pub judge_passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_completeness: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_findings: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_evaluated_run_id: Option<String>,
 }
 
 impl From<GoalRecord> for GoalPayload {
@@ -218,7 +246,6 @@ impl From<GoalRecord> for GoalPayload {
             objective: r.objective,
             status: r.status,
             tokens_used: r.tokens_used,
-            time_used_seconds: r.time_used_seconds,
             turns_used: r.turns_used,
             max_turns: r.max_turns,
             token_budget: r.token_budget,
@@ -226,6 +253,11 @@ impl From<GoalRecord> for GoalPayload {
             pause_detail: r.pause_detail,
             evidence: r.evidence,
             last_evaluated_run_id: r.last_evaluated_run_id,
+            judge_passed: r.judge_passed,
+            judge_completeness: r.judge_completeness,
+            judge_findings: r.judge_findings,
+            judge_summary: r.judge_summary,
+            judge_evaluated_run_id: r.judge_evaluated_run_id,
         }
     }
 }

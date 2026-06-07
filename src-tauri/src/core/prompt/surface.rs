@@ -10,6 +10,8 @@ pub enum PromptSurface {
     SubagentExplore { inherited_run_mode: RunMode },
     /// Built-in review subagent
     SubagentReview { inherited_run_mode: RunMode },
+    /// Built-in goal acceptance Judge subagent
+    SubagentJudge { inherited_run_mode: RunMode },
     /// User-defined custom subagent
     SubagentCustom {
         slug: String,
@@ -46,9 +48,9 @@ pub enum SurfacePattern {
     AnyMainAgent,
     /// Matches a specific MainAgent run_mode
     MainAgent(RunMode),
-    /// Matches any subagent surface (explore, review, custom)
+    /// Matches any subagent surface (explore, review, judge, custom)
     AnySubagent,
-    /// Matches built-in explore + review subagents only
+    /// Matches built-in explore + review + judge subagents only
     BuiltinSubagent,
     /// Matches any custom subagent regardless of slug
     CustomSubagent,
@@ -70,9 +72,11 @@ impl SurfacePattern {
             }
             (SurfacePattern::AnySubagent, PromptSurface::SubagentExplore { .. }) => true,
             (SurfacePattern::AnySubagent, PromptSurface::SubagentReview { .. }) => true,
+            (SurfacePattern::AnySubagent, PromptSurface::SubagentJudge { .. }) => true,
             (SurfacePattern::AnySubagent, PromptSurface::SubagentCustom { .. }) => true,
             (SurfacePattern::BuiltinSubagent, PromptSurface::SubagentExplore { .. }) => true,
             (SurfacePattern::BuiltinSubagent, PromptSurface::SubagentReview { .. }) => true,
+            (SurfacePattern::BuiltinSubagent, PromptSurface::SubagentJudge { .. }) => true,
             (SurfacePattern::CustomSubagent, PromptSurface::SubagentCustom { .. }) => true,
             (SurfacePattern::Compaction(k), PromptSurface::Compaction { kind }) => k == kind,
             (SurfacePattern::AnyCompaction, PromptSurface::Compaction { .. }) => true,

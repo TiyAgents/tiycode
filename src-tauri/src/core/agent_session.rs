@@ -601,6 +601,34 @@ pub async fn build_session_spec(
         .await
         .map(|settings| settings.is_ready())
         .unwrap_or(false);
+
+    let mut runtime_tools = runtime_tools_with_custom_subagents(
+        runtime_tools_with_web_search(
+            runtime_tools_for_profile_with_extensions(&tool_profile_name, extension_tools),
+            &tool_profile_name,
+            web_search_enabled,
+        ),
+        custom_subagent_tools,
+    );
+
+    // Inject the main-agent-only `agent_judge` acceptance tool on demand: only
+    // when this thread has a goal that has not yet passed Judge acceptance
+    // (acceptance = status Complete AND judge_passed). It is appended after the
+    // custom/extension merge so that the built-in tool name always wins and
+    // cannot be shadowed by a custom or extension tool.
+    if let Ok(Some(goal)) =
+        crate::persistence::repo::goal_repo::find_by_thread_id(pool, thread_id).await
+    {
+        let already_verified =
+            goal.status == crate::model::goal::GoalStatus::Complete && goal.judge_passed;
+        if !already_verified {
+            let judge_tool = crate::core::subagent::RuntimeOrchestrationTool::Judge.as_agent_tool();
+            if !runtime_tools.iter().any(|t| t.name == judge_tool.name) {
+                runtime_tools.push(judge_tool);
+            }
+        }
+    }
+
     let initial_context_calibration = build_initial_context_token_calibration(
         latest_historical_run.as_ref(),
         &history_messages,
@@ -615,14 +643,7 @@ pub async fn build_session_spec(
         workspace_path: workspace_path.to_string(),
         run_mode: run_mode.to_string(),
         tool_profile_name: tool_profile_name.clone(),
-        runtime_tools: runtime_tools_with_custom_subagents(
-            runtime_tools_with_web_search(
-                runtime_tools_for_profile_with_extensions(&tool_profile_name, extension_tools),
-                &tool_profile_name,
-                web_search_enabled,
-            ),
-            custom_subagent_tools,
-        ),
+        runtime_tools,
         system_prompt,
         history_messages,
         history_tool_calls,

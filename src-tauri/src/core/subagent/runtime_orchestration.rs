@@ -14,7 +14,7 @@ pub const GLOBAL_MAX_DELEGATION_DEPTH: u32 = 5;
 
 /// Built-in default for the maximum delegation depth a built-in subagent
 /// (explore / review) may be delegated to.
-pub const BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH: u32 = 3;
+pub const BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH: u32 = 5;
 
 pub const TERM_STATUS_TOOL_DESCRIPTION: &str =
     "Inspect the status of the desktop app's embedded Terminal panel session for the current thread. Use this to check that panel's session state without mutating it. It does not inspect the agent runtime, CLI process, or host shell outside the panel.";
@@ -34,6 +34,10 @@ pub enum RuntimeOrchestrationTool {
     Explore,
     Review,
     Parallel,
+    /// Goal acceptance Judge. Main-agent-only tool (`agent_judge`): it is parsed
+    /// here for unified dispatch but is never part of `builtin_all()` nor any
+    /// helper's delegation tool set.
+    Judge,
     Custom(String), // slug of the custom subagent
 }
 
@@ -41,6 +45,7 @@ pub enum RuntimeOrchestrationTool {
 pub enum SubagentProfile {
     Explore,
     Review,
+    Judge,
     Custom {
         slug: String,
         name: String,
@@ -130,6 +135,7 @@ impl RuntimeOrchestrationTool {
             "agent_explore" => Some(Self::Explore),
             "agent_review" => Some(Self::Review),
             "agent_parallel" => Some(Self::Parallel),
+            "agent_judge" => Some(Self::Judge),
             _ => {
                 // Match custom subagent pattern: "agent_{slug}"
                 if let Some(slug) = tool_name.strip_prefix("agent_") {
@@ -151,6 +157,7 @@ impl RuntimeOrchestrationTool {
             Self::Explore => "agent_explore".to_string(),
             Self::Review => "agent_review".to_string(),
             Self::Parallel => "agent_parallel".to_string(),
+            Self::Judge => "agent_judge".to_string(),
             Self::Custom(slug) => format!("agent_{slug}"),
         }
     }
@@ -160,6 +167,7 @@ impl RuntimeOrchestrationTool {
             Self::Explore => "Agent Explore".to_string(),
             Self::Review => "Agent Review".to_string(),
             Self::Parallel => "Agent Parallel".to_string(),
+            Self::Judge => "Agent Judge".to_string(),
             Self::Custom(slug) => format!("Agent {slug}"),
         }
     }
@@ -175,6 +183,9 @@ impl RuntimeOrchestrationTool {
             Self::Parallel => {
                 "Delegate 1-5 independent subtasks to subagents with bounded concurrency. Use this for parallel exploration or review work only when tasks are independent and low side-effect; results are aggregated for the parent agent."
             }
+            Self::Judge => {
+                "Request independent acceptance verification of the current goal. The Judge inspects the project's current state (read-only, with diagnostic shell for tests/type-check/lint) against the goal and returns a structured verdict. You cannot self-declare completion — only a passing Judge verdict marks the goal verified. Call this when you believe the goal is achieved, or to re-verify after fixing prior findings."
+            }
             Self::Custom(_) => {
                 // Custom subagents have their description set externally via custom_subagent_as_tool
                 "Custom subagent."
@@ -188,6 +199,7 @@ impl RuntimeOrchestrationTool {
         match self {
             Self::Explore => Some(SubagentProfile::Explore),
             Self::Review => Some(SubagentProfile::Review),
+            Self::Judge => Some(SubagentProfile::Judge),
             Self::Parallel | Self::Custom(_) => None,
         }
     }
@@ -339,6 +351,16 @@ impl RuntimeOrchestrationTool {
                 },
                 "required": ["task"]
             }),
+            Self::Judge => serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "Explain why you believe the goal is achieved and call out anything the Judge should focus on (e.g. acceptance criteria, areas you are unsure about). If you are re-verifying after fixing earlier findings, summarize what you changed."
+                    }
+                },
+                "required": ["task"]
+            }),
         };
 
         let name = self.tool_name();
@@ -353,6 +375,7 @@ impl SubagentProfile {
         match self {
             Self::Explore => "helper_explore".to_string(),
             Self::Review => "helper_review".to_string(),
+            Self::Judge => "helper_judge".to_string(),
             Self::Custom { slug, .. } => format!("helper_custom_{slug}"),
         }
     }
@@ -364,6 +387,8 @@ impl SubagentProfile {
         match self {
             Self::Explore => false,
             Self::Review => true,
+            // Judge may delegate explore/review/parallel to gather evidence.
+            Self::Judge => true,
             Self::Custom { can_delegate, .. } => *can_delegate,
         }
     }
@@ -374,6 +399,11 @@ impl SubagentProfile {
     pub fn max_delegation_depth(&self) -> u32 {
         match self {
             Self::Explore | Self::Review => BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH,
+            // Judge is delegated by the main agent (depth 1) and must be
+            // accepted at depth 2 (the main agent's child depth). It may itself
+            // delegate explore/review at depth 3, which remains within
+            // BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH and GLOBAL_MAX_DELEGATION_DEPTH.
+            Self::Judge => 2,
             Self::Custom {
                 max_delegation_depth,
                 ..
@@ -435,6 +465,7 @@ impl SubagentProfile {
         match self {
             Self::Explore => include_str!("../prompt/templates/subagent/explore.md").to_string(),
             Self::Review => include_str!("../prompt/templates/subagent/review.md").to_string(),
+            Self::Judge => include_str!("../prompt/templates/subagent/judge.md").to_string(),
             Self::Custom { system_prompt, .. } => system_prompt.clone(),
         }
     }
@@ -619,6 +650,74 @@ impl SubagentProfile {
                     "shell",
                     "Run Command",
                     "Run a non-interactive shell command inside the current workspace. Use this only for diagnostic and verification commands such as type-checking and test suites. Do not use it to modify files or state.",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "command": { "type": "string" },
+                            "cwd": { "type": "string" },
+                            "timeout": { "type": "number" }
+                        },
+                        "required": ["command"]
+                    }),
+                ),
+            ]);
+        }
+
+        if *self == Self::Judge {
+            // Judge keeps file tools read-only but is allowed a diagnostic-only
+            // shell plus read-only git/terminal inspection for verification.
+            tools.extend([
+                AgentTool::new(
+                    "git_status",
+                    "Git Status",
+                    "Inspect repository status in the current workspace without modifying anything.",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Optional relative path to narrow the status query." }
+                        }
+                    }),
+                ),
+                AgentTool::new(
+                    "git_diff",
+                    "Git Diff",
+                    "Read the current Git diff in the workspace, optionally scoped to a path or staged changes.",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Optional relative path to inspect." },
+                            "staged": { "type": "boolean", "description": "Set true to inspect staged changes instead of working tree changes." },
+                            "contextLines": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 20,
+                                "description": "Optional number of unified diff context lines. Defaults to 3 and is capped for safety."
+                            }
+                        }
+                    }),
+                ),
+                AgentTool::new(
+                    "term_status",
+                    "Terminal Status",
+                    TERM_STATUS_TOOL_DESCRIPTION,
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {}
+                    }),
+                ),
+                AgentTool::new(
+                    "term_output",
+                    "Terminal Output",
+                    TERM_OUTPUT_TOOL_DESCRIPTION,
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {}
+                    }),
+                ),
+                AgentTool::new(
+                    "shell",
+                    "Run Command",
+                    "Run a non-interactive shell command inside the current workspace. Judge may use this ONLY for diagnostic and verification commands such as tests, type-checks, linters, and read-only inspection. Never use it to modify files, delete data, install dependencies, start long-running or interactive processes, or change global state.",
                     serde_json::json!({
                         "type": "object",
                         "properties": {
@@ -903,6 +1002,54 @@ mod tests {
     }
 
     #[test]
+    fn judge_tool_parses_but_is_not_in_builtin_catalog() {
+        assert_eq!(
+            RuntimeOrchestrationTool::parse("agent_judge"),
+            Some(RuntimeOrchestrationTool::Judge)
+        );
+        // Judge is main-agent-only: it must NOT be part of the built-in
+        // delegation catalog that subagents can reach.
+        let catalog = runtime_orchestration_tools();
+        assert!(!catalog.iter().any(|tool| tool.name == "agent_judge"));
+    }
+
+    #[test]
+    fn judge_profile_is_read_only_with_diagnostic_shell() {
+        let tools = SubagentProfile::Judge.helper_tools(false);
+        let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+
+        assert!(tool_names.contains(&"read"));
+        assert!(tool_names.contains(&"list"));
+        assert!(tool_names.contains(&"find"));
+        assert!(tool_names.contains(&"search"));
+        assert!(tool_names.contains(&"shell"));
+        // Read-only: no file mutation or interactive terminal tools.
+        assert!(!tool_names.contains(&"edit"));
+        assert!(!tool_names.contains(&"write"));
+        assert!(!tool_names.contains(&"term_write"));
+        assert!(!tool_names.contains(&"term_restart"));
+        assert!(!tool_names.contains(&"term_close"));
+    }
+
+    #[test]
+    fn judge_can_delegate_at_depth_two() {
+        assert!(SubagentProfile::Judge.can_delegate());
+        assert_eq!(SubagentProfile::Judge.max_delegation_depth(), 2);
+        assert_eq!(SubagentProfile::Judge.helper_kind(), "helper_judge");
+    }
+
+    #[test]
+    fn judge_is_never_a_delegation_target_for_helpers() {
+        // Even a Judge that can delegate only receives explore/review/parallel,
+        // never agent_judge.
+        let tools = SubagentProfile::Judge.delegation_tools_for_helper(3, &[]);
+        let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert!(!tool_names.contains(&"agent_judge"));
+        assert!(tool_names.contains(&"agent_explore"));
+        assert!(tool_names.contains(&"agent_review"));
+    }
+
+    #[test]
     fn agent_parallel_tool_schema_has_bounded_tasks() {
         let tool = RuntimeOrchestrationTool::Parallel.as_agent_tool();
         assert_eq!(tool.name, "agent_parallel");
@@ -1042,8 +1189,8 @@ mod tests {
 
     #[test]
     fn review_profile_omits_delegation_tools_beyond_builtin_depth() {
-        // child_depth 4 exceeds BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH (3).
-        let tools = SubagentProfile::Review.delegation_tools_for_helper(4, &[]);
+        // child_depth 6 exceeds BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH (5).
+        let tools = SubagentProfile::Review.delegation_tools_for_helper(6, &[]);
         assert!(tools.is_empty());
     }
 

@@ -5,8 +5,9 @@ use crate::model::errors::AppError;
 use crate::model::goal::{GoalRecord, GoalStatus, PauseReason};
 
 const SELECT_COLUMNS: &str = "id, thread_id, objective, status, token_budget, tokens_used, \
-    time_used_seconds, turns_used, max_turns, pause_reason, pause_detail, evidence, \
-    last_evaluated_run_id, created_at, updated_at";
+    turns_used, max_turns, pause_reason, pause_detail, evidence, \
+    last_evaluated_run_id, judge_passed, judge_completeness, judge_findings, judge_summary, \
+    judge_evaluated_run_id, created_at, updated_at";
 
 // ── Database row (raw sqlx types) ──
 
@@ -18,13 +19,17 @@ struct GoalRow {
     status: String,
     token_budget: Option<i64>,
     tokens_used: i64,
-    time_used_seconds: i64,
     turns_used: i64,
     max_turns: i64,
     pause_reason: Option<String>,
     pause_detail: Option<String>,
     evidence: Option<String>,
     last_evaluated_run_id: Option<String>,
+    judge_passed: i64,
+    judge_completeness: Option<i64>,
+    judge_findings: Option<String>,
+    judge_summary: Option<String>,
+    judge_evaluated_run_id: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -38,13 +43,17 @@ impl GoalRow {
             status: GoalStatus::from_str(&self.status),
             token_budget: self.token_budget,
             tokens_used: self.tokens_used,
-            time_used_seconds: self.time_used_seconds,
             turns_used: self.turns_used,
             max_turns: self.max_turns,
             pause_reason: self.pause_reason.map(|s| PauseReason::from_str(&s)),
             pause_detail: self.pause_detail,
             evidence: self.evidence,
             last_evaluated_run_id: self.last_evaluated_run_id,
+            judge_passed: self.judge_passed != 0,
+            judge_completeness: self.judge_completeness,
+            judge_findings: self.judge_findings,
+            judge_summary: self.judge_summary,
+            judge_evaluated_run_id: self.judge_evaluated_run_id,
             created_at: DateTime::parse_from_rfc3339(&self.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
@@ -80,12 +89,16 @@ pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<GoalRecord
 }
 
 pub async fn insert(pool: &SqlitePool, record: &GoalRecord) -> Result<(), AppError> {
+    // Note: the judge_* columns are intentionally omitted here and rely on the
+    // DDL defaults (judge_passed=0, others NULL) set by the goal_judge_fields
+    // migration. New goals always start un-verified, and the Judge verdict is
+    // written later via record_judge_verdict().
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT INTO goals (id, thread_id, objective, status, token_budget, tokens_used, \
-         time_used_seconds, turns_used, max_turns, pause_reason, pause_detail, evidence, \
+         turns_used, max_turns, pause_reason, pause_detail, evidence, \
          last_evaluated_run_id, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.thread_id)
@@ -93,7 +106,6 @@ pub async fn insert(pool: &SqlitePool, record: &GoalRecord) -> Result<(), AppErr
     .bind(record.status.as_str())
     .bind(record.token_budget)
     .bind(record.tokens_used)
-    .bind(record.time_used_seconds)
     .bind(record.turns_used)
     .bind(record.max_turns)
     .bind(record.pause_reason.as_ref().map(|r| r.as_str()))
@@ -136,19 +148,16 @@ pub async fn account_usage(
     pool: &SqlitePool,
     id: &str,
     tokens_delta: i64,
-    time_delta_seconds: i64,
     turns_delta: i64,
 ) -> Result<(), AppError> {
     sqlx::query(
         "UPDATE goals SET \
          tokens_used = tokens_used + ?, \
-         time_used_seconds = time_used_seconds + ?, \
          turns_used = turns_used + ?, \
          updated_at = ? \
          WHERE id = ?",
     )
     .bind(tokens_delta)
-    .bind(time_delta_seconds)
     .bind(turns_delta)
     .bind(Utc::now().to_rfc3339())
     .bind(id)
@@ -195,4 +204,67 @@ pub async fn delete_by_thread_id(pool: &SqlitePool, thread_id: &str) -> Result<b
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Persist the most recent Judge verdict for a goal. Always updates the
+/// `judge_*` columns. When `passed` is true, the same transaction also writes
+/// `status='complete'` and `evidence=summary` so that acceptance
+/// (`status=complete` AND `judge_passed=1`) can never be observed as a
+/// half-applied state. When `passed` is false the goal's `status` is left
+/// unchanged (typically still `active`).
+#[allow(clippy::too_many_arguments)]
+pub async fn record_judge_verdict(
+    pool: &SqlitePool,
+    id: &str,
+    run_id: &str,
+    passed: bool,
+    completeness: i64,
+    findings_json: &str,
+    summary: &str,
+) -> Result<bool, AppError> {
+    let now = Utc::now().to_rfc3339();
+    let mut tx = pool.begin().await?;
+
+    let updated = sqlx::query(
+        "UPDATE goals SET \
+         judge_passed = ?, \
+         judge_completeness = ?, \
+         judge_findings = ?, \
+         judge_summary = ?, \
+         judge_evaluated_run_id = ?, \
+         updated_at = ? \
+         WHERE id = ?",
+    )
+    .bind(if passed { 1_i64 } else { 0_i64 })
+    .bind(completeness)
+    .bind(findings_json)
+    .bind(summary)
+    .bind(run_id)
+    .bind(&now)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+
+    if passed {
+        sqlx::query(
+            "UPDATE goals SET \
+             status = 'complete', \
+             evidence = COALESCE(NULLIF(?, ''), evidence), \
+             updated_at = ? \
+             WHERE id = ?",
+        )
+        .bind(summary)
+        .bind(&now)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(true)
 }

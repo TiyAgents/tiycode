@@ -1133,6 +1133,7 @@ const zhCN = {
   "goal.status.paused": "已暂停",
   "goal.status.budgetLimited": "预算耗尽",
   "goal.status.complete": "已完成",
+  "goal.status.verified": "已验收通过",
   "goal.time.elapsed": "已持续运行{{time}}",
   "goal.time.hoursMinutes": "{{hours}}小时{{minutes}}分",
   "goal.time.minutesSeconds": "{{minutes}}分{{seconds}}秒",

@@ -61,6 +61,25 @@ impl SectionSource for SubagentBodySource {
                     },
                 }))
             }
+            Some(SubagentProfile::Judge) => {
+                let template = include_str!("../templates/subagent/judge.md");
+                let (_tmpl, body) =
+                    super::super::templates::parse_front_matter(template).map_err(|e| {
+                        FatalError::new("template.parse", format!("subagent/judge.md: {e}"))
+                    })?;
+                let vars = super::super::templates::TemplateVars::new();
+                let rendered = super::super::templates::render_template_strict(&body, &[], &vars)
+                    .map_err(|e| {
+                    FatalError::new("template.render", format!("subagent/judge.md: {e}"))
+                })?;
+                Ok(SectionOutcome::Produced(SectionBody {
+                    markdown: rendered,
+                    meta: SectionMeta {
+                        template_path: Some("templates/subagent/judge.md"),
+                        ..Default::default()
+                    },
+                }))
+            }
             Some(SubagentProfile::Custom { system_prompt, .. }) => {
                 if system_prompt.trim().is_empty() {
                     return Ok(SectionOutcome::Skip);
