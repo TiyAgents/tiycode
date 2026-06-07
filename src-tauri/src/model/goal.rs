@@ -119,7 +119,6 @@ pub struct GoalRecord {
     pub status: GoalStatus,
     pub token_budget: Option<i64>,
     pub tokens_used: i64,
-    pub time_used_seconds: i64,
     pub turns_used: i64,
     pub max_turns: i64,
     pub pause_reason: Option<PauseReason>,
@@ -151,7 +150,6 @@ pub struct GoalDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<i64>,
     pub tokens_used: i64,
-    pub time_used_seconds: i64,
     pub turns_used: i64,
     pub max_turns: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,7 +182,6 @@ impl From<GoalRecord> for GoalDto {
             status: r.status,
             token_budget: r.token_budget,
             tokens_used: r.tokens_used,
-            time_used_seconds: r.time_used_seconds,
             turns_used: r.turns_used,
             max_turns: r.max_turns,
             pause_reason: r.pause_reason,
@@ -218,7 +215,6 @@ pub struct GoalPayload {
     pub objective: String,
     pub status: GoalStatus,
     pub tokens_used: i64,
-    pub time_used_seconds: i64,
     pub turns_used: i64,
     pub max_turns: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,7 +246,6 @@ impl From<GoalRecord> for GoalPayload {
             objective: r.objective,
             status: r.status,
             tokens_used: r.tokens_used,
-            time_used_seconds: r.time_used_seconds,
             turns_used: r.turns_used,
             max_turns: r.max_turns,
             token_budget: r.token_budget,

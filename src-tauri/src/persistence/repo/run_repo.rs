@@ -1152,44 +1152,6 @@ mod tests {
             "expected running segment to be added, got {elapsed}"
         );
     }
-
-    #[tokio::test]
-    async fn get_active_run_elapsed_seconds_returns_positive_for_running() {
-        let pool = setup_test_pool().await;
-        // Insert a running run with a past started_at so elapsed > 0
-        sqlx::query(
-            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at, input_tokens, output_tokens, total_tokens)
-             VALUES ('run-active', 't1', 'default', 'running', '2026-04-22T09:00:00Z', 0, 0, 0)",
-        )
-        .execute(&pool)
-        .await
-        .expect("seed run");
-
-        let duration = super::get_active_run_elapsed_seconds(&pool, "t1")
-            .await
-            .unwrap()
-            .expect("should return elapsed seconds for running run");
-        // With started_at in the past, elapsed should be > 0
-        assert!(duration > 0, "expected positive elapsed, got {duration}");
-    }
-
-    #[tokio::test]
-    async fn get_active_run_elapsed_seconds_skips_terminal_runs() {
-        let pool = setup_test_pool().await;
-        // Insert a completed run (should be skipped)
-        sqlx::query(
-            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at, input_tokens, output_tokens, total_tokens)
-             VALUES ('run-done', 't1', 'default', 'completed', '2026-04-22T09:00:00Z', 0, 0, 0)",
-        )
-        .execute(&pool)
-        .await
-        .expect("seed run");
-
-        let duration = super::get_active_run_elapsed_seconds(&pool, "t1")
-            .await
-            .unwrap();
-        assert!(duration.is_none(), "should skip completed runs");
-    }
 }
 
 /// Get the duration in seconds of the last completed run for a thread.
@@ -1225,46 +1187,6 @@ pub async fn get_run_duration(pool: &SqlitePool, run_id: &str) -> Result<Option<
          LIMIT 1",
     )
     .bind(run_id)
-    .fetch_optional(pool)
-    .await?
-    .flatten();
-    Ok(duration)
-}
-
-/// Get the wall-clock elapsed seconds since a specific run started.
-/// Useful for billing a still-active run before it is terminated.
-pub async fn get_run_elapsed_seconds(
-    pool: &SqlitePool,
-    run_id: &str,
-) -> Result<Option<i64>, AppError> {
-    let duration = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT CAST(strftime('%s', 'now') - strftime('%s', started_at) AS INTEGER)
-         FROM thread_runs
-         WHERE id = ?
-         LIMIT 1",
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await?
-    .flatten();
-    Ok(duration)
-}
-
-/// Get the elapsed seconds of any currently active (non-terminal) run for a thread.
-/// Returns None if no active run exists.
-pub async fn get_active_run_elapsed_seconds(
-    pool: &SqlitePool,
-    thread_id: &str,
-) -> Result<Option<i64>, AppError> {
-    let duration = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT CAST(strftime('%s', 'now') - strftime('%s', started_at) AS INTEGER)
-         FROM thread_runs
-         WHERE thread_id = ?
-           AND status NOT IN ('completed','failed','denied','interrupted','cancelled','limit_reached')
-         ORDER BY started_at DESC
-         LIMIT 1",
-    )
-    .bind(thread_id)
     .fetch_optional(pool)
     .await?
     .flatten();

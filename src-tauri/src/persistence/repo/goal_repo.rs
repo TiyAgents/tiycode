@@ -5,7 +5,7 @@ use crate::model::errors::AppError;
 use crate::model::goal::{GoalRecord, GoalStatus, PauseReason};
 
 const SELECT_COLUMNS: &str = "id, thread_id, objective, status, token_budget, tokens_used, \
-    time_used_seconds, turns_used, max_turns, pause_reason, pause_detail, evidence, \
+    turns_used, max_turns, pause_reason, pause_detail, evidence, \
     last_evaluated_run_id, judge_passed, judge_completeness, judge_findings, judge_summary, \
     judge_evaluated_run_id, created_at, updated_at";
 
@@ -19,7 +19,6 @@ struct GoalRow {
     status: String,
     token_budget: Option<i64>,
     tokens_used: i64,
-    time_used_seconds: i64,
     turns_used: i64,
     max_turns: i64,
     pause_reason: Option<String>,
@@ -44,7 +43,6 @@ impl GoalRow {
             status: GoalStatus::from_str(&self.status),
             token_budget: self.token_budget,
             tokens_used: self.tokens_used,
-            time_used_seconds: self.time_used_seconds,
             turns_used: self.turns_used,
             max_turns: self.max_turns,
             pause_reason: self.pause_reason.map(|s| PauseReason::from_str(&s)),
@@ -98,9 +96,9 @@ pub async fn insert(pool: &SqlitePool, record: &GoalRecord) -> Result<(), AppErr
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT INTO goals (id, thread_id, objective, status, token_budget, tokens_used, \
-         time_used_seconds, turns_used, max_turns, pause_reason, pause_detail, evidence, \
+         turns_used, max_turns, pause_reason, pause_detail, evidence, \
          last_evaluated_run_id, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.thread_id)
@@ -108,7 +106,6 @@ pub async fn insert(pool: &SqlitePool, record: &GoalRecord) -> Result<(), AppErr
     .bind(record.status.as_str())
     .bind(record.token_budget)
     .bind(record.tokens_used)
-    .bind(record.time_used_seconds)
     .bind(record.turns_used)
     .bind(record.max_turns)
     .bind(record.pause_reason.as_ref().map(|r| r.as_str()))
@@ -151,19 +148,16 @@ pub async fn account_usage(
     pool: &SqlitePool,
     id: &str,
     tokens_delta: i64,
-    time_delta_seconds: i64,
     turns_delta: i64,
 ) -> Result<(), AppError> {
     sqlx::query(
         "UPDATE goals SET \
          tokens_used = tokens_used + ?, \
-         time_used_seconds = time_used_seconds + ?, \
          turns_used = turns_used + ?, \
          updated_at = ? \
          WHERE id = ?",
     )
     .bind(tokens_delta)
-    .bind(time_delta_seconds)
     .bind(turns_delta)
     .bind(Utc::now().to_rfc3339())
     .bind(id)

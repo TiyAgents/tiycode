@@ -24,7 +24,7 @@ use crate::core::sleep_manager::SleepManager;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageAttachmentDto, MessageRecord, RunStatus};
-use crate::persistence::repo::{goal_repo, message_repo, run_repo, thread_repo, workspace_repo};
+use crate::persistence::repo::{message_repo, run_repo, thread_repo, workspace_repo};
 
 pub(crate) use crate::core::agent_run_event_handler::build_orphaned_run_terminal_event;
 #[cfg(test)]
@@ -433,44 +433,6 @@ impl AgentRunManager {
 
         let (profile_id, provider_id, model_id) = extract_run_model_refs(&model_plan_value);
 
-        // Account the planning run's billable time to the active goal so the
-        // frontend timer displays the correct accumulated time when the new
-        // implementation run starts (the frontend resets its local elapsed on
-        // every run_id change, so time_used_seconds must include the full
-        // planning-phase cost).
-        {
-            let planning_elapsed = run_repo::get_run_elapsed_seconds(&self.pool, &planning_run_id)
-                .await?
-                .unwrap_or(0);
-            let paused_seconds = {
-                let mut guard = self.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("goal pause runtime mutex poisoned, recovering");
-                    poisoned.into_inner()
-                });
-                guard.take_run_paused_seconds(&planning_run_id).max(0)
-            };
-            let billable = (planning_elapsed - paused_seconds).max(0);
-            if billable > 0 {
-                if let Ok(Some(goal)) = goal_repo::find_by_thread_id(&self.pool, thread_id).await {
-                    if let Err(error) = goal_repo::account_usage(
-                        &self.pool, &goal.id,
-                        0, // tokens_delta: planning turns were already counted
-                        billable, 0, // turns_delta
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            planning_run_id = %planning_run_id,
-                            goal_id = %goal.id,
-                            billable_seconds = billable,
-                            error = %error,
-                            "failed to account planning run time to goal"
-                        );
-                    }
-                }
-            }
-        }
-
         let mut approval_metadata = approval_metadata;
         approval_metadata.state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
         approval_metadata.approved_action = Some(action.clone());
@@ -511,20 +473,6 @@ impl AgentRunManager {
                 },
             )
             .await?;
-
-        // Emit the updated goal state through the new run's event channel so
-        // the frontend sees the accumulated time_used_seconds (which now
-        // includes the planning-run time) before it starts the real-time timer
-        // for the new implementation run.
-        if let Ok(Some(goal)) = goal_repo::find_by_thread_id(&self.pool, thread_id).await {
-            let runs = self.active_runs.lock().await;
-            if let Some(run) = runs.get(&result.0) {
-                let _ = run.frontend_tx.send(ThreadStreamEvent::GoalStateUpdated {
-                    thread_id: thread_id.to_string(),
-                    goal: Some(crate::model::goal::GoalPayload::from(goal)),
-                });
-            }
-        }
 
         if let Some(seed_messages) = context_seed_messages.as_ref() {
             self.persist_messages(seed_messages).await?;

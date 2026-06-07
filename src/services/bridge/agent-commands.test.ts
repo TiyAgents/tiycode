@@ -366,7 +366,6 @@ function makeGoalPayload(overrides: Partial<GoalPayload> = {}): GoalPayload {
     objective: "Build a todo app",
     status: "active",
     tokensUsed: 0,
-    timeUsedSeconds: 0,
     turnsUsed: 0,
     maxTurns: 50,
     tokenBudget: null,

@@ -148,7 +148,6 @@ impl GoalManager {
             status: GoalStatus::Active,
             token_budget,
             tokens_used: 0,
-            time_used_seconds: 0,
             turns_used: 0,
             max_turns: DEFAULT_MAX_TURNS,
             pause_reason: None,
@@ -251,14 +250,9 @@ impl GoalManager {
         goal_repo::delete_by_thread_id(&self.pool, &self.thread_id).await
     }
 
-    /// Account usage after a turn. Increments turn count, tokens, and time.
-    pub async fn account_usage(
-        &self,
-        goal_id: &str,
-        tokens: i64,
-        time_seconds: i64,
-    ) -> Result<(), AppError> {
-        goal_repo::account_usage(&self.pool, goal_id, tokens, time_seconds, 1).await
+    /// Account usage after a turn. Increments turn count and tokens.
+    pub async fn account_usage(&self, goal_id: &str, tokens: i64) -> Result<(), AppError> {
+        goal_repo::account_usage(&self.pool, goal_id, tokens, 1).await
     }
 
     // ── Auto-resume ──
@@ -609,20 +603,19 @@ impl GoalManager {
             }
         }
 
+        // Bump goal turn counter for any run that did real work. We still consult
+        // run duration to filter out zero-work runs (e.g. an immediately-interrupted
+        // run shouldn't burn a turn against max_turns); active running time is
+        // tracked separately on thread_runs.elapsed_running_secs and is no longer
+        // billed against the goal here.
         if let Some(run_seconds) =
             crate::persistence::repo::run_repo::get_run_duration(&self.pool, run_id)
                 .await
                 .unwrap_or(None)
         {
-            let paused_seconds = self.lock_runtime().take_run_paused_seconds(run_id).max(0);
-            let billable_seconds = (run_seconds - paused_seconds).max(0);
-            if billable_seconds > 0 {
-                self.account_usage(&current.id, 0, billable_seconds)
-                    .await
-                    .ok();
+            if run_seconds > 0 {
+                self.account_usage(&current.id, 0).await.ok();
             }
-        } else {
-            self.lock_runtime().take_run_paused_seconds(run_id);
         }
 
         let updated = self.get_active().await?;

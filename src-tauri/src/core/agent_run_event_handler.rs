@@ -184,33 +184,6 @@ pub(crate) fn sidebar_status_for_runtime_event(
 }
 
 impl AgentRunManager {
-    fn start_goal_run_pause(&self, thread_id: &str, run_id: &str) {
-        if thread_id.is_empty() {
-            return;
-        }
-        let mut guard = self.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("goal pause runtime mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.start_run_pause(thread_id, run_id);
-    }
-
-    fn finish_goal_run_pause(&self, run_id: &str) {
-        let mut guard = self.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("goal pause runtime mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.finish_run_pause(run_id);
-    }
-
-    fn cleanup_goal_run_pause(&self, run_id: &str) {
-        let mut guard = self.goal_runtime_state.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("goal pause runtime mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.cleanup_run_pause(run_id);
-    }
-
     pub(crate) async fn handle_runtime_channel_closed(
         self: &Arc<Self>,
         run_id: &str,
@@ -410,26 +383,22 @@ impl AgentRunManager {
             }
             ThreadStreamEvent::ApprovalRequired { .. } => {
                 let thread_id = self.get_thread_id(run_id).await;
-                self.start_goal_run_pause(&thread_id, run_id);
                 run_repo::update_status(&self.pool, run_id, RunStatus::WaitingApproval).await?;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::WaitingApproval)
                     .await?;
             }
             ThreadStreamEvent::ClarifyRequired { .. } => {
                 let thread_id = self.get_thread_id(run_id).await;
-                self.start_goal_run_pause(&thread_id, run_id);
                 run_repo::update_status(&self.pool, run_id, RunStatus::NeedsReply).await?;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::NeedsReply)
                     .await?;
             }
             ThreadStreamEvent::ApprovalResolved { .. } => {
-                self.finish_goal_run_pause(run_id);
                 run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
             }
             ThreadStreamEvent::ClarifyResolved { .. } => {
-                self.finish_goal_run_pause(run_id);
                 run_repo::update_status(&self.pool, run_id, RunStatus::Running).await?;
                 let thread_id = self.get_thread_id(run_id).await;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::Running).await?;
@@ -458,7 +427,6 @@ impl AgentRunManager {
             }
             ThreadStreamEvent::RunCheckpointed { .. } => {
                 let thread_id = self.get_thread_id(run_id).await;
-                self.start_goal_run_pause(&thread_id, run_id);
                 run_repo::update_status(&self.pool, run_id, RunStatus::WaitingApproval).await?;
                 thread_repo::update_status(&self.pool, &thread_id, &ThreadStatus::WaitingApproval)
                     .await?;
@@ -476,7 +444,6 @@ impl AgentRunManager {
                         | ThreadStreamEvent::RunFailed { error, .. } => Some(error.as_str()),
                         _ => None,
                     };
-                    self.finish_goal_run_pause(run_id);
                     self.finish_run(run_id, final_status, error_message).await?;
                     let thread_id = self.get_thread_id(run_id).await;
                     if let Some(frontend_tx) = self.frontend_tx_for_run(run_id).await {
@@ -567,7 +534,6 @@ impl AgentRunManager {
                     );
                 }
             }
-            self.cleanup_goal_run_pause(run_id);
         }
 
         Ok(())

@@ -138,7 +138,6 @@ mod tests {
 
         let after_first = mgr.get_active().await.unwrap().unwrap();
         assert_eq!(after_first.turns_used, goal.turns_used + 1);
-        assert_eq!(after_first.time_used_seconds, 42);
         assert_eq!(after_first.last_evaluated_run_id.as_deref(), Some("run-1"));
 
         let second = mgr
@@ -150,10 +149,6 @@ mod tests {
 
         let after_second = mgr.get_active().await.unwrap().unwrap();
         assert_eq!(after_second.turns_used, after_first.turns_used);
-        assert_eq!(
-            after_second.time_used_seconds,
-            after_first.time_used_seconds
-        );
     }
 
     #[tokio::test]
@@ -233,7 +228,7 @@ mod tests {
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
 
         // Set turns_used to at least max_turns via account_usage
-        goal_repo::account_usage(&pool, &goal.id, 0, 0, goal.max_turns)
+        goal_repo::account_usage(&pool, &goal.id, 0, goal.max_turns)
             .await
             .unwrap();
 
@@ -373,7 +368,7 @@ mod tests {
         let goal = mgr.create_goal("Test goal", Some(500)).await.unwrap();
 
         // Accumulate tokens to reach the budget
-        goal_repo::account_usage(&pool, &goal.id, 500, 0, 0)
+        goal_repo::account_usage(&pool, &goal.id, 500, 0)
             .await
             .unwrap();
 
