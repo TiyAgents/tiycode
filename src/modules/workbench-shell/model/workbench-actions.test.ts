@@ -387,7 +387,7 @@ describe("deleteThread", () => {
     threadStore.setState({
       activeThreadId: null,
       workspaces: [makeWorkspace("ws-1", [thread])],
-      pendingRuns: { "thread-1": { id: "run-1", prompt: "test", runMode: "auto" } as any },
+      pendingRuns: { "thread-1": { id: "run-1", prompt: "test" } as any },
     });
 
     await deleteThread("thread-1", { skipIpc: true });
@@ -461,7 +461,7 @@ describe("removeWorkspace", () => {
     threadStore.setState({
       activeThreadId: null,
       workspaces: [ws1],
-      pendingRuns: { "thread-1": { id: "run-1", prompt: "test", runMode: "auto" } as any },
+      pendingRuns: { "thread-1": { id: "run-1", prompt: "test" } as any },
     });
 
     await removeWorkspace(ws1 as any);
@@ -583,7 +583,6 @@ describe("submitNewThread", () => {
   ): NewThreadSubmission {
     return {
       value: "test prompt",
-      runMode: "default",
       effectivePrompt: "test prompt",
       ...overrides,
     };
@@ -594,7 +593,6 @@ describe("submitNewThread", () => {
       workspaces: [],
       isNewThreadMode: true,
     });
-    composerStore.setState({ newThreadRunMode: "default" });
     settingsStore.setState({ activeAgentProfileId: "default-profile" });
 
     await submitNewThread(makeSubmission({ value: "hello" }));
@@ -626,7 +624,6 @@ describe("submitNewThread", () => {
       workspaces: [workspace],
       isNewThreadMode: true,
     });
-    composerStore.setState({ newThreadRunMode: "default" });
     settingsStore.setState({ activeAgentProfileId: "default-profile" });
 
     await submitNewThread(makeSubmission({ value: "hello" }));
@@ -659,7 +656,6 @@ describe("submitNewThread", () => {
       isNewThreadMode: true,
     });
     projectStore.setState({ selectedProject: project, recentProjects: [project] });
-    composerStore.setState({ newThreadRunMode: "default" });
     settingsStore.setState({ activeAgentProfileId: "default-profile" });
 
     await submitNewThread(makeSubmission({
@@ -703,7 +699,6 @@ describe("submitNewThread", () => {
       workspaces: [workspace],
       isNewThreadMode: true,
     });
-    composerStore.setState({ newThreadRunMode: "default" });
     settingsStore.setState({ activeAgentProfileId: "default-profile" });
 
     await submitNewThread(makeSubmission({ value: "new thread" }));

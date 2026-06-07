@@ -51,7 +51,7 @@ import {
   findWorkspaceByPath,
 } from "@/modules/workbench-shell/model/workspace-path-bindings";
 import type { ProjectOption, WorkspaceItem } from "@/modules/workbench-shell/model/types";
-import type { MessageAttachmentDto, RunMode, ThreadSummaryDto, WorkspaceDto } from "@/shared/types/api";
+import type { MessageAttachmentDto, ThreadSummaryDto, WorkspaceDto } from "@/shared/types/api";
 import type { LanguagePreference } from "@/app/providers/language-provider";
 import type { ComposerCommandInvocation } from "@/modules/workbench-shell/model/composer-commands";
 
@@ -61,7 +61,6 @@ import type { ComposerCommandInvocation } from "@/modules/workbench-shell/model/
 
 export interface NewThreadSubmission {
   value: string;
-  runMode: RunMode;
   displayText?: string;
   effectivePrompt: string;
   attachments?: MessageAttachmentDto[];
@@ -574,7 +573,6 @@ export async function submitNewThread(submission: NewThreadSubmission): Promise<
 
   // Re-read workspaces after async IPC to avoid stale state
   const { workspaces } = threadStore.getState();
-  const { newThreadRunMode } = composerStore.getState();
 
   // Find or match the workspace in the sidebar
   const existingWorkspace =
@@ -674,7 +672,6 @@ export async function submitNewThread(submission: NewThreadSubmission): Promise<
       attachments: (submission.attachments ?? []) as unknown as PendingThreadRun["attachments"],
       metadata: submission.metadata ?? null,
       command: submission.command,
-      runMode: submission.runMode ?? newThreadRunMode,
       threadId,
     };
     return {
@@ -717,7 +714,6 @@ export async function submitNewThread(submission: NewThreadSubmission): Promise<
   // Reset composer
   composerStore.setState({
     newThreadValue: "",
-    newThreadRunMode: "default",
     newThreadReferencedFiles: [],
     newThreadAttachmentData: [],
     error: null,

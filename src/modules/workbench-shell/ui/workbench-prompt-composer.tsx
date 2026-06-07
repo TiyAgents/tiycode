@@ -72,7 +72,7 @@ import type { updateAgentProfile as updateAgentProfileAction } from "@/modules/s
 import { sortAgentProfilesByName } from "@/modules/settings-center/model/profile-utils";
 import { profileSubagentAccessGet } from "@/services/bridge/subagent-commands";
 import type { SkillRecord } from "@/shared/types/extensions";
-import type { RunMode, RuntimeQueueMessageKind } from "@/shared/types/api";
+import type { RuntimeQueueMessageKind } from "@/shared/types/api";
 import { indexFilterFiles, type FileFilterMatch } from "@/services/bridge";
 import type { SerializableAttachment } from "@/modules/workbench-shell/model/composer-store";
 import { useT } from "@/i18n";
@@ -182,7 +182,6 @@ function isSlashCommandActive(value: string) {
 function buildSubmissionFromPromptInput(
   message: PromptInputMessage,
   registry: ReadonlyArray<ComposerCommandDescriptor>,
-  runMode: RunMode,
   referencedFiles: ReadonlyArray<ComposerReferencedFile>,
 ): ComposerSubmission {
   const rawText = message.text ?? "";
@@ -215,7 +214,6 @@ function buildSubmissionFromPromptInput(
             },
           }
         : null,
-      runMode,
     };
   }
 
@@ -227,7 +225,6 @@ function buildSubmissionFromPromptInput(
     effectivePrompt,
     rawMessage: message,
     attachments,
-    runMode,
     command: {
       source: parsedCommand.command.source,
       name: parsedCommand.command.name,
@@ -2143,7 +2140,7 @@ export function WorkbenchPromptComposer({
   // must be called inside a PromptInput descendant.
 
   const handlePromptSubmit = async (message: PromptInputMessage) => {
-    const submission = buildSubmissionFromPromptInput(message, commandRegistry, "default", referencedFiles);
+    const submission = buildSubmissionFromPromptInput(message, commandRegistry, referencedFiles);
     await onSubmit(submission);
     // Only clear referenced files and sources after a successful submit.
     // If onSubmit throws (e.g. thread has an active run), the composer

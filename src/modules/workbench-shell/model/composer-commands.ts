@@ -1,6 +1,6 @@
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import type { CommandEntry } from "@/modules/settings-center/model/types";
-import type { MessageAttachmentDto, RunMode } from "@/shared/types/api";
+import type { MessageAttachmentDto } from "@/shared/types/api";
 
 export type ComposerReferencedFile = {
   name: string;
@@ -139,7 +139,6 @@ export type ComposerSubmission = {
   attachments: MessageAttachmentDto[];
   command?: ComposerCommandInvocation;
   metadata?: Record<string, unknown> | null;
-  runMode?: RunMode;
 };
 
 const BUILTIN_COMMANDS: ReadonlyArray<ComposerCommandDescriptor> = [
@@ -551,7 +550,6 @@ export function buildCommandEffectivePrompt(
 export function buildComposerSubmission(
   message: PromptInputMessage,
   registry: ReadonlyArray<ComposerCommandDescriptor>,
-  runMode?: RunMode,
 ): ComposerSubmission | null {
   const rawText = message.text ?? "";
   const trimmedText = rawText.trim();
@@ -574,7 +572,6 @@ export function buildComposerSubmission(
       rawMessage: message,
       attachments,
       metadata: null,
-      runMode,
     };
   }
 
@@ -605,6 +602,5 @@ export function buildComposerSubmission(
         command: invocation,
       },
     },
-    runMode,
   };
 }

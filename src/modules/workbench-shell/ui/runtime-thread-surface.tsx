@@ -38,7 +38,6 @@ import {
 } from "@/services/thread-stream";
 import type {
   MessageAttachmentDto,
-  RunMode,
   RuntimeQueueMessageKind,
   RuntimeQueueMessageDto,
   RuntimeQueueSnapshotDto,
@@ -118,7 +117,6 @@ import { TaskHistoryTimeline } from "@/modules/workbench-shell/ui/task-stage-his
 import {
   appendOrReplaceMessage,
   compareTimelineEntries,
-  deriveSelectedRunMode,
   formatApprovalPromptState,
   formatToolStatusLabel,
   getApprovalReason,
@@ -356,7 +354,6 @@ export function RuntimeThreadSurface({
     threadStore,
     (s) => (threadId ? s.threadStatuses[threadId]?.runId ?? null : null),
   );
-  const [selectedRunMode, setSelectedRunMode] = useState<RunMode>("default");
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [snapshotThreadId, setSnapshotThreadId] = useState<string | null>(null);
 
@@ -376,7 +373,6 @@ export function RuntimeThreadSurface({
   useEffect(() => {
     if (prevThreadIdRef.current !== threadId) {
       prevThreadIdRef.current = threadId;
-      setSelectedRunMode("default");
       setRuntimeQueueSubmitMode(defaultAppendMessageKind);
       setRequestRetryEntries([]);
       setRequestRetryOpen({});
@@ -694,7 +690,6 @@ export function RuntimeThreadSurface({
         }
         eventBufferRef.current = [];
       }
-      setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
       if (!shouldPreserveContextUsage) {
         threadStore.setState({ runtimeContextUsage: nextContextUsage });
       }
@@ -836,7 +831,6 @@ export function RuntimeThreadSurface({
         errorMessage: null,
         retryCount: 0,
       });
-      setSelectedRunMode((current) => deriveSelectedRunMode(snapshot, current));
 
       const latestVisibleRun = getLatestVisibleRun(snapshot);
       if (latestVisibleRun?.id === runId) {
@@ -1017,9 +1011,6 @@ export function RuntimeThreadSurface({
 
       if (event.type === "run_started") {
         setApprovingPlanMessageId(null);
-        if (event.runMode === "default" || event.runMode === "plan") {
-          setSelectedRunMode(event.runMode);
-        }
       }
 
       if (event.type === "stream_resync_required") {
@@ -1505,7 +1496,6 @@ export function RuntimeThreadSurface({
 
   const submitPrompt = useCallback(async (
     submissionOrPrompt: ComposerSubmission | string,
-    runModeOverride?: RunMode,
   ): Promise<boolean> => {
     if (!threadId) {
       setComposerError("This thread is still preparing. Try again in a moment.");
@@ -1520,7 +1510,6 @@ export function RuntimeThreadSurface({
           rawMessage: { text: submissionOrPrompt, files: [] },
           attachments: [],
           metadata: null,
-          runMode: runModeOverride,
         }
       : submissionOrPrompt;
     const prompt = submission.effectivePrompt ?? "";
@@ -1726,7 +1715,7 @@ export function RuntimeThreadSurface({
           promptMetadata: submission.metadata ?? null,
           attachments: submission.attachments,
         },
-        runModeOverride ?? submission.runMode ?? selectedRunMode,
+        "default",
         modelPlan,
       );
     } catch (error) {
@@ -1736,7 +1725,7 @@ export function RuntimeThreadSurface({
       submittingRef.current = false;
     }
     return true;
-  }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, providers, runState, runtimeQueueSubmitMode, selectedRunMode, t, threadId]);
+  }, [activeAgentProfileId, activeProfile, agentProfiles, appendOptimisticUserMessage, loadSnapshot, providers, runState, runtimeQueueSubmitMode, t, threadId]);
 
   const cancelRuntimeQueueMessage = useCallback(async (messageId: string) => {
     if (!threadId || !streamRef.current) {
@@ -1884,9 +1873,6 @@ export function RuntimeThreadSurface({
 
     // Mark as handled at the store level — survives component unmount/remount.
     markPendingRunHandled(initialPromptRequestId!);
-    if (initialPromptRequest.runMode) {
-      setSelectedRunMode(initialPromptRequest.runMode);
-    }
     const pendingRunSubmission: ComposerSubmission = {
       kind: initialPromptRequest.command ? "command" : "plain",
       displayText: initialPromptRequest.displayText,
@@ -1895,9 +1881,8 @@ export function RuntimeThreadSurface({
       attachments: initialPromptRequest.attachments,
       command: initialPromptRequest.command,
       metadata: initialPromptRequest.metadata,
-      runMode: initialPromptRequest.runMode,
     };
-    void submitPrompt(pendingRunSubmission, initialPromptRequest.runMode)
+    void submitPrompt(pendingRunSubmission)
       .finally(() => {
         threadStore.setState((prev) => {
           const next = Object.fromEntries(
