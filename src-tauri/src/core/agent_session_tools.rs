@@ -6,12 +6,14 @@ use tiycore::types::{
 use crate::core::agent_session_types::{
     ResolvedModelRole, ResolvedRuntimeModelPlan, RuntimeModelPlan,
 };
+use crate::core::subagent::runtime_orchestration::CustomDelegationTarget;
 use crate::core::subagent::{
     runtime_orchestration_tools, RuntimeOrchestrationTool, SubagentProfile,
     TERM_CLOSE_TOOL_DESCRIPTION, TERM_OUTPUT_TOOL_DESCRIPTION, TERM_RESTART_TOOL_DESCRIPTION,
     TERM_STATUS_TOOL_DESCRIPTION, TERM_WRITE_TOOL_DESCRIPTION,
 };
 use crate::model::subagent::CustomSubagentModelRole;
+use sqlx::SqlitePool;
 
 use super::agent_session::{
     CLARIFY_TOOL_NAME, DEFAULT_FULL_TOOL_PROFILE, PLAN_MODE_MISSING_CHECKPOINT_ERROR,
@@ -708,6 +710,87 @@ fn resolve_custom_helper_model_role(
             .or_else(|| model_plan.auxiliary.clone())
             .unwrap_or_else(|| model_plan.primary.clone()),
     }
+}
+
+/// Resolve a custom subagent slug into a `SubagentProfile` directly from a pool,
+/// validating that the subagent is enabled and accessible from the active agent
+/// profile via `profile_subagent_access`. This is a free function (rather than a
+/// method on `AgentSession`) so that the helper orchestrator can reuse it when a
+/// delegating subagent recursively delegates to a custom subagent.
+pub(crate) async fn resolve_custom_subagent_profile_from_pool(
+    pool: &SqlitePool,
+    slug: &str,
+) -> Option<SubagentProfile> {
+    use crate::persistence::repo::{custom_subagent_repo, settings_repo};
+
+    let record = custom_subagent_repo::get_by_slug(pool, slug)
+        .await
+        .ok()
+        .flatten()?;
+
+    if !record.is_enabled {
+        return None;
+    }
+
+    // Verify the active profile grants access to this subagent. If no active
+    // profile is set, custom subagents are not available — consistent with
+    // build_session_spec which injects no custom tools when profile_id is empty.
+    let active_profile_id = settings_repo::get(pool, "active_profile_id")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<String>(&s.value_json).ok())
+        .unwrap_or_default();
+
+    if active_profile_id.is_empty() {
+        return None;
+    }
+
+    let allowed_ids = custom_subagent_repo::get_profile_access(pool, &active_profile_id)
+        .await
+        .unwrap_or_default();
+    if !allowed_ids.contains(&record.id) {
+        return None;
+    }
+
+    Some(SubagentProfile::Custom {
+        slug: record.slug.clone(),
+        name: record.name.clone(),
+        invocation_description: record.invocation_description.clone(),
+        system_prompt: record.system_prompt.clone(),
+        allowed_tools: record.allowed_tools_vec(),
+        model_role: record.model_role,
+        can_delegate: record.can_delegate,
+        max_delegation_depth: record.max_delegation_depth,
+    })
+}
+
+/// List the custom subagents accessible from the active agent profile as
+/// `CustomDelegationTarget`s, used to inject `agent_{slug}` delegation tools into
+/// a delegating subagent's tool set. Returns an empty vec when no active profile
+/// is set or on any lookup error.
+pub(crate) async fn list_custom_delegation_targets_from_pool(
+    pool: &SqlitePool,
+) -> Vec<CustomDelegationTarget> {
+    use crate::persistence::repo::{custom_subagent_repo, settings_repo};
+
+    let active_profile_id = settings_repo::get(pool, "active_profile_id")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<String>(&s.value_json).ok())
+        .unwrap_or_default();
+
+    if active_profile_id.is_empty() {
+        return Vec::new();
+    }
+
+    custom_subagent_repo::list_for_profile(pool, &active_profile_id)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(CustomDelegationTarget::from_record)
+        .collect()
 }
 
 /// Maximum characters for a tool result output when replayed from history.

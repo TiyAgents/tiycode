@@ -2153,9 +2153,13 @@ Used for prompt assembly coverage.
             sample_resolved_runtime_model_plan(Some(sample_resolved_model_role("assistant-model")));
         let profile = SubagentProfile::Custom {
             slug: "primary-agent".to_string(),
+            name: "Primary Agent".to_string(),
+            invocation_description: "primary agent".to_string(),
             system_prompt: "Use primary.".to_string(),
             allowed_tools: vec![],
             model_role: CustomSubagentModelRole::Primary,
+            can_delegate: false,
+            max_delegation_depth: 3,
         };
 
         let helper_role = resolve_helper_model_role(
@@ -2176,9 +2180,13 @@ Used for prompt assembly coverage.
         );
         let profile = SubagentProfile::Custom {
             slug: "light-agent".to_string(),
+            name: "Light Agent".to_string(),
+            invocation_description: "light agent".to_string(),
             system_prompt: "Use lightweight.".to_string(),
             allowed_tools: vec![],
             model_role: CustomSubagentModelRole::Lightweight,
+            can_delegate: false,
+            max_delegation_depth: 3,
         };
 
         let helper_role = resolve_helper_model_role(
@@ -2195,9 +2203,13 @@ Used for prompt assembly coverage.
     fn custom_lightweight_helper_falls_back_to_auxiliary_then_primary() {
         let profile = SubagentProfile::Custom {
             slug: "fallback-agent".to_string(),
+            name: "Fallback Agent".to_string(),
+            invocation_description: "fallback agent".to_string(),
             system_prompt: "Fallback.".to_string(),
             allowed_tools: vec![],
             model_role: CustomSubagentModelRole::Lightweight,
+            can_delegate: false,
+            max_delegation_depth: 3,
         };
 
         let with_auxiliary =

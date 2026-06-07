@@ -49,32 +49,22 @@ struct ResolvedHelperDelegate {
     model_role: ResolvedModelRole,
 }
 
+/// Delegation chain depth (1-based) at which the main agent's direct delegates
+/// run. The main agent is depth 1, so its immediate sub-agents are depth 2.
+/// Shared by the resolve-time depth check and the `HelperRunRequest` it builds.
+const MAIN_AGENT_CHILD_DEPTH: u32 = 2;
+
 fn resolve_helper_tool_task(
     tool: RuntimeOrchestrationTool,
     tool_input: &serde_json::Value,
 ) -> Result<HelperToolTask, String> {
-    if tool == RuntimeOrchestrationTool::Review {
-        let request = ReviewRequest::from_tool_input(tool_input)?;
-        return Ok(HelperToolTask {
-            task: request.to_helper_prompt(),
-            review_request: Some(request),
-        });
-    }
-
-    let task = tool_input
-        .get("task")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-
-    if task.is_empty() {
-        return Err("missing helper task".to_string());
-    }
-
+    // Shares the task/review-request extraction with the recursive subagent
+    // delegation path to avoid divergent prompt construction.
+    let (task, review_request) =
+        crate::core::subagent::orchestrator::resolve_delegation_task(&tool, tool_input)?;
     Ok(HelperToolTask {
         task,
-        review_request: None,
+        review_request,
     })
 }
 
@@ -920,6 +910,20 @@ impl AgentSession {
                     format!("No helper profile resolved for tool '{}'", tool.tool_name())
                 })?;
 
+        // The main agent is depth 1, so its direct delegates run at depth 2.
+        // Reject targets whose configured max delegation depth cannot accommodate
+        // being delegated to at depth 2 (mirrors the recursive subagent path's
+        // enforcement in HelperDelegationContext::resolve_delegation_sync).
+        if let Some(profile) = resolved_profile.as_ref() {
+            let max_depth = profile.max_delegation_depth();
+            if MAIN_AGENT_CHILD_DEPTH > max_depth {
+                return Err(format!(
+                    "{} cannot be delegated at depth {MAIN_AGENT_CHILD_DEPTH} (its max delegation depth is {max_depth})",
+                    tool.tool_name()
+                ));
+            }
+        }
+
         Ok(ResolvedHelperDelegate {
             agent_name: tool.tool_name(),
             tool,
@@ -935,6 +939,12 @@ impl AgentSession {
         delegate: &ResolvedHelperDelegate,
         parent_tool_call_id: &str,
     ) -> Result<HelperRunResult, crate::model::errors::AppError> {
+        // Custom subagents accessible from the active profile, so a delegated
+        // helper that is allowed to delegate further can inject and resolve
+        // `agent_{slug}` delegation tools without re-reading the active profile.
+        let custom_delegation_targets =
+            crate::core::agent_session_tools::list_custom_delegation_targets_from_pool(&self.pool)
+                .await;
         self.helper_orchestrator
             .run_helper(HelperRunRequest {
                 run_id: self.spec.run_id.clone(),
@@ -944,12 +954,14 @@ impl AgentSession {
                 parent_tool_call_id: Some(parent_tool_call_id.to_string()),
                 task: delegate.task.clone(),
                 model_role: delegate.model_role.clone(),
-                system_prompt: self.spec.system_prompt.clone(),
                 workspace_path: self.spec.workspace_path.clone(),
                 run_mode: self.spec.run_mode.clone(),
                 event_tx: self.event_tx.clone(),
                 session_abort_signal: self.abort_signal.clone(),
                 thinking_level: self.spec.model_plan.thinking_level,
+                delegation_depth: MAIN_AGENT_CHILD_DEPTH,
+                model_plan: self.spec.model_plan.clone(),
+                custom_delegation_targets,
             })
             .await
     }
@@ -1005,44 +1017,10 @@ impl AgentSession {
     /// Validates both that the subagent is enabled and that it is accessible from the
     /// active agent profile via the `profile_subagent_access` table.
     async fn resolve_custom_subagent_profile(&self, slug: &str) -> Option<SubagentProfile> {
-        use crate::persistence::repo::{custom_subagent_repo, settings_repo};
-
-        let record = custom_subagent_repo::get_by_slug(&self.pool, slug)
-            .await
-            .ok()
-            .flatten()?;
-
-        if !record.is_enabled {
-            return None;
-        }
-
-        // Verify the active profile grants access to this subagent.
-        // If no active profile is set, custom subagents are not available — consistent
-        // with build_session_spec which injects no custom tools when profile_id is empty.
-        let active_profile_id = settings_repo::get(&self.pool, "active_profile_id")
-            .await
-            .ok()
-            .flatten()
-            .and_then(|s| serde_json::from_str::<String>(&s.value_json).ok())
-            .unwrap_or_default();
-
-        if active_profile_id.is_empty() {
-            return None;
-        }
-
-        let allowed_ids = custom_subagent_repo::get_profile_access(&self.pool, &active_profile_id)
-            .await
-            .unwrap_or_default();
-        if !allowed_ids.contains(&record.id) {
-            return None;
-        }
-
-        Some(SubagentProfile::Custom {
-            slug: record.slug.clone(),
-            system_prompt: record.system_prompt.clone(),
-            allowed_tools: record.allowed_tools_vec(),
-            model_role: record.model_role,
-        })
+        crate::core::agent_session_tools::resolve_custom_subagent_profile_from_pool(
+            &self.pool, slug,
+        )
+        .await
     }
 
     async fn execute_plan_checkpoint(&self, tool_input: &serde_json::Value) -> AgentToolResult {
@@ -1132,7 +1110,13 @@ impl AgentSession {
         }
 
         self.checkpoint_requested.store(true, Ordering::SeqCst);
+        // Mirror AgentSession::cancel ordering: cancel in-flight tool calls,
+        // abort any in-flight subagents for this run (so a helper mid-LLM-turn
+        // stops rather than only exiting on its next poll), then abort the main
+        // agent. abort_signal child tokens already cascade into tool executions,
+        // but cancel_run is needed to stop subagent Agent run loops promptly.
         self.abort_signal.cancel();
+        self.helper_orchestrator.cancel_run(&self.spec.run_id).await;
         self.agent.abort();
 
         let result_message = match &plan_file_path {
@@ -2096,9 +2080,13 @@ mod tests {
             review_request: None,
             helper_profile: Some(SubagentProfile::Custom {
                 slug: "custom".to_string(),
+                name: "Custom".to_string(),
+                invocation_description: "custom agent".to_string(),
                 system_prompt: "custom prompt".to_string(),
                 allowed_tools: allowed_tools.into_iter().map(str::to_string).collect(),
                 model_role: CustomSubagentModelRole::Auxiliary,
+                can_delegate: false,
+                max_delegation_depth: 3,
             }),
             model_role: test_model_role(),
         }

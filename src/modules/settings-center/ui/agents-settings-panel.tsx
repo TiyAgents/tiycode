@@ -38,6 +38,13 @@ import { Input } from "@/shared/ui/input";
 import { Separator } from "@/shared/ui/separator";
 import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/select";
 
 const TOOL_CATEGORIES: Array<{ labelKey: TranslationKey; tools: string[] }> = [
   {
@@ -66,16 +73,22 @@ const BUILT_IN_AGENTS: Array<{
   nameKey: TranslationKey;
   descriptionKey: TranslationKey;
   icon: typeof FileSearch;
+  canDelegate: boolean;
+  maxDelegationDepth: number;
 }> = [
   {
     nameKey: "settings.agents.builtIn.explore.name",
     descriptionKey: "settings.agents.builtIn.explore.desc",
     icon: FileSearch,
+    canDelegate: false,
+    maxDelegationDepth: 3,
   },
   {
     nameKey: "settings.agents.builtIn.review.name",
     descriptionKey: "settings.agents.builtIn.review.desc",
     icon: CheckCircle2,
+    canDelegate: true,
+    maxDelegationDepth: 3,
   },
 ];
 
@@ -179,6 +192,8 @@ export function AgentsSettingsPanel({
       allowedTools: ["read", "list", "search", "find"],
       modelRole: "auxiliary",
       isEnabled: true,
+      canDelegate: false,
+      maxDelegationDepth: 3,
     };
     try {
       const created = await customSubagentCreate(input);
@@ -267,6 +282,8 @@ export function AgentsSettingsPanel({
       allowedTools: editState.allowedTools ?? selectedAgent.allowedTools,
       modelRole: editState.modelRole ?? selectedAgent.modelRole ?? "auxiliary",
       isEnabled: editState.isEnabled ?? selectedAgent.isEnabled,
+      canDelegate: editState.canDelegate ?? selectedAgent.canDelegate,
+      maxDelegationDepth: editState.maxDelegationDepth ?? selectedAgent.maxDelegationDepth,
     };
     setEditorErrorMessage(null);
     setIsSaving(true);
@@ -447,6 +464,59 @@ export function AgentsSettingsPanel({
           <Separator />
 
           <FieldGroup
+            title={t("settings.agents.delegation")}
+            description={t("settings.agents.delegationDesc")}
+          >
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-app-border bg-app-surface-muted px-3 py-2.5">
+              <label
+                htmlFor={`agent-can-delegate-${selectedAgent.id}`}
+                className="min-w-0 text-[13px] font-medium text-app-foreground"
+              >
+                {t("settings.agents.canDelegate")}
+                <span className="mt-0.5 block text-[12px] font-normal leading-5 text-app-muted">
+                  {t("settings.agents.canDelegateDesc")}
+                </span>
+              </label>
+              <Switch
+                id={`agent-can-delegate-${selectedAgent.id}`}
+                size="sm"
+                checked={(currentValue("canDelegate") as boolean) ?? false}
+                onCheckedChange={(checked) => updateField("canDelegate", checked)}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-app-border bg-app-surface-muted px-3 py-2.5">
+              <div className="min-w-0">
+                <span className="text-[13px] font-medium text-app-foreground">
+                  {t("settings.agents.maxDelegationDepth")}
+                </span>
+                <span className="mt-0.5 block text-[12px] font-normal leading-5 text-app-muted">
+                  {t("settings.agents.maxDelegationDepthDesc")}
+                </span>
+              </div>
+              <Select
+                value={String((currentValue("maxDelegationDepth") as number) ?? 3)}
+                onValueChange={(value) => updateField("maxDelegationDepth", Number(value))}
+              >
+                <SelectTrigger
+                  className="w-[72px] rounded-lg border-app-border bg-app-surface px-2.5 py-1.5 text-[13px] text-app-foreground shadow-none hover:bg-app-surface-hover focus-visible:border-app-info/40 focus-visible:ring-app-info/10"
+                  size="sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {[1, 2, 3, 4, 5].map((depth) => (
+                    <SelectItem key={depth} value={String(depth)}>
+                      {depth}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </FieldGroup>
+
+          <Separator />
+
+          <FieldGroup
             title={t("settings.agents.behavior")}
             description={t("settings.agents.behaviorDesc")}
           >
@@ -569,6 +639,17 @@ export function AgentsSettingsPanel({
                   </span>
                 </div>
                 <p className="mt-3 text-[12px] leading-5 text-app-muted">{t(agent.descriptionKey)}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {agent.canDelegate ? (
+                    <span className="rounded-full border border-app-info/30 bg-app-info/10 px-2 py-0.5 text-[11px] font-medium text-app-info">
+                      {t("settings.agents.delegationBadge", { depth: agent.maxDelegationDepth })}
+                    </span>
+                  ) : (
+                    <span className="rounded-full border border-app-border bg-app-surface px-2 py-0.5 text-[11px] font-medium text-app-subtle">
+                      {t("settings.agents.cannotDelegateBadge")}
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -637,6 +718,11 @@ export function AgentsSettingsPanel({
                           <span className="rounded-full border border-app-border bg-app-surface-muted px-2 py-0.5 text-[11px] font-medium text-app-subtle">
                             {modelRoleLabel(agent.modelRole)}
                           </span>
+                          {agent.canDelegate ? (
+                            <span className="rounded-full border border-app-info/30 bg-app-info/10 px-2 py-0.5 text-[11px] font-medium text-app-info">
+                              {t("settings.agents.delegationBadge", { depth: agent.maxDelegationDepth })}
+                            </span>
+                          ) : null}
                           {isSelected && hasUnsavedChanges ? (
                             <span className="rounded-full border border-app-warning/30 bg-app-warning/10 px-2 py-0.5 text-[11px] font-medium text-app-warning">
                               {t("settings.agents.unsaved")}
