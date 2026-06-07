@@ -173,10 +173,22 @@ pub struct SubagentProgressSnapshot {
     pub recent_actions: Vec<String>,
 }
 
+/// A single registered helper agent plus the metadata needed to synthesize a
+/// terminal `SubagentFailed` event and DB status if the run is cancelled while
+/// this helper is still in flight (its own cleanup future may be dropped).
+struct RegisteredHelper {
+    agent: Arc<Agent>,
+    helper_id: String,
+    helper_kind: String,
+    started_at: String,
+    event_tx: tokio::sync::mpsc::UnboundedSender<ThreadStreamEvent>,
+    progress_state: Arc<StdMutex<SubagentProgressState>>,
+}
+
 /// Tracks active helper agents for a single run, with a cancellation guard
 /// that prevents new helpers from registering after `cancel_run` has fired.
 struct RunHelpersState {
-    helpers: Vec<Arc<Agent>>,
+    helpers: Vec<RegisteredHelper>,
     cancelled: bool,
 }
 
@@ -210,6 +222,18 @@ impl HelperAgentOrchestrator {
     }
 
     pub async fn run_helper(&self, request: HelperRunRequest) -> Result<HelperRunResult, AppError> {
+        // Fast pre-check: if the parent session was already cancelled, do not
+        // even insert a `running` row or emit SubagentStarted. The shared
+        // `session_abort_signal` is durable (it stays cancelled once fired),
+        // unlike the per-run `active_helpers` entry which is torn down after
+        // `cancel_run`. This prevents a cancelled run from spawning helpers that
+        // would otherwise linger at `running` in the DB / event stream.
+        if request.session_abort_signal.is_cancelled() {
+            return Err(AppError::internal(
+                ErrorSource::Thread,
+                "run cancelled".to_string(),
+            ));
+        }
         let helper_profile = match request.helper_profile.or_else(|| request.tool.profile()) {
             Some(p) => p,
             None => {
@@ -599,12 +623,44 @@ impl HelperAgentOrchestrator {
                     cancelled: false,
                 });
             if state.cancelled {
+                // The run was cancelled between our DB insert / SubagentStarted
+                // emission above and this registration point. We must not leave
+                // this helper stuck at `running`: write a terminal status and
+                // emit SubagentFailed so both the DB snapshot and the live event
+                // stream converge on a terminal state.
+                drop(helpers);
+                let snapshot = snapshot_from_progress(&progress_state);
+                let error_message = "Subagent cancelled before it started running.";
+                let newly_marked = run_helper_repo::mark_interrupted_if_active(
+                    &self.pool,
+                    &helper_id,
+                    error_message,
+                )
+                .await
+                .unwrap_or(false);
+                if newly_marked {
+                    let _ = request.event_tx.send(ThreadStreamEvent::SubagentFailed {
+                        run_id: request.run_id.clone(),
+                        subtask_id: helper_id.clone(),
+                        helper_kind: resolved_helper_kind.clone(),
+                        started_at: helper_started_at.clone(),
+                        error: error_message.to_string(),
+                        snapshot,
+                    });
+                }
                 return Err(AppError::internal(
                     ErrorSource::Thread,
                     "run cancelled".to_string(),
                 ));
             }
-            state.helpers.push(Arc::clone(&agent));
+            state.helpers.push(RegisteredHelper {
+                agent: Arc::clone(&agent),
+                helper_id: helper_id.clone(),
+                helper_kind: resolved_helper_kind.clone(),
+                started_at: helper_started_at.clone(),
+                event_tx: request.event_tx.clone(),
+                progress_state: Arc::clone(&progress_state),
+            });
         }
 
         let helper_run_id_for_usage = request.run_id.clone();
@@ -682,7 +738,11 @@ impl HelperAgentOrchestrator {
                 let interrupted = error.to_string().to_lowercase().contains("aborted");
                 let usage = Usage::default();
                 let snapshot = snapshot_from_progress(&progress_state);
-                run_helper_repo::mark_failed(
+                // Only emit SubagentFailed when this call actually transitioned
+                // the helper to a terminal state. If a concurrent `cancel_run`
+                // already flipped it to `interrupted`, `mark_failed` is a no-op
+                // and we skip the event to avoid double-reporting the helper.
+                let newly_marked = run_helper_repo::mark_failed(
                     &self.pool,
                     &helper_id,
                     &error.to_string(),
@@ -691,14 +751,16 @@ impl HelperAgentOrchestrator {
                 )
                 .await?;
 
-                let _ = request.event_tx.send(ThreadStreamEvent::SubagentFailed {
-                    run_id: request.run_id,
-                    subtask_id: helper_id,
-                    helper_kind: resolved_helper_kind,
-                    started_at: helper_started_at,
-                    error: error.to_string(),
-                    snapshot,
-                });
+                if newly_marked {
+                    let _ = request.event_tx.send(ThreadStreamEvent::SubagentFailed {
+                        run_id: request.run_id,
+                        subtask_id: helper_id,
+                        helper_kind: resolved_helper_kind,
+                        started_at: helper_started_at,
+                        error: error.to_string(),
+                        snapshot,
+                    });
+                }
 
                 Err(AppError::internal(
                     ErrorSource::Thread,
@@ -734,7 +796,37 @@ impl HelperAgentOrchestrator {
         };
 
         for helper in helpers {
-            helper.abort();
+            // Abort the underlying agent so its run loop / LLM streaming stops.
+            helper.agent.abort();
+
+            // The aborted helper's own `run_helper` cleanup (mark_failed +
+            // SubagentFailed emission) normally runs once `agent.prompt()`
+            // returns. But during a live cancel the surrounding tool future can
+            // be dropped before that cleanup executes, leaving the helper stuck
+            // at `running`. Proactively converge it on a terminal state here.
+            let error_message = "Subagent interrupted because the run was cancelled.";
+            let marked = run_helper_repo::mark_interrupted_if_active(
+                &self.pool,
+                &helper.helper_id,
+                error_message,
+            )
+            .await
+            .unwrap_or(false);
+
+            // Only emit the synthetic terminal event when we actually flipped
+            // the DB status, so we never double-report a helper that finished
+            // cleanly in the same instant cancellation fired.
+            if marked {
+                let snapshot = snapshot_from_progress(&helper.progress_state);
+                let _ = helper.event_tx.send(ThreadStreamEvent::SubagentFailed {
+                    run_id: run_id.to_string(),
+                    subtask_id: helper.helper_id.clone(),
+                    helper_kind: helper.helper_kind.clone(),
+                    started_at: helper.started_at.clone(),
+                    error: error_message.to_string(),
+                    snapshot,
+                });
+            }
         }
     }
 
@@ -743,7 +835,7 @@ impl HelperAgentOrchestrator {
         if let Some(state) = active.get_mut(run_id) {
             state
                 .helpers
-                .retain(|candidate| !Arc::ptr_eq(candidate, helper));
+                .retain(|candidate| !Arc::ptr_eq(&candidate.agent, helper));
             if state.helpers.is_empty() {
                 active.remove(run_id);
             }

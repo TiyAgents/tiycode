@@ -123,16 +123,22 @@ pub async fn mark_failed(
     error_summary: &str,
     interrupted: bool,
     usage: &Usage,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     let now = Utc::now().to_rfc3339();
     let status = if interrupted { "interrupted" } else { "failed" };
 
-    sqlx::query(
+    // Guard against overwriting a helper that already reached a terminal state
+    // (e.g. when live run cancellation already flipped it to `interrupted` via
+    // `mark_interrupted_if_active`). Returning whether the row was actually
+    // updated lets callers avoid emitting a duplicate `SubagentFailed` event.
+    let result = sqlx::query(
         "UPDATE run_helpers
          SET status = ?, error_summary = ?, finished_at = ?,
              input_tokens = ?, output_tokens = ?, cache_read_tokens = ?,
              cache_write_tokens = ?, total_tokens = ?
-         WHERE id = ?",
+         WHERE id = ?
+           AND status NOT IN ('completed', 'failed', 'interrupted', 'cancelled')
+           AND finished_at IS NULL",
     )
     .bind(status)
     .bind(error_summary)
@@ -146,7 +152,37 @@ pub async fn mark_failed(
     .execute(pool)
     .await?;
 
-    Ok(())
+    Ok(result.rows_affected() > 0)
+}
+
+/// Mark a single still-active helper as interrupted, but only when it has not
+/// already reached a terminal state. Used during live run cancellation so that
+/// in-flight helpers whose own cleanup future may be dropped still land on a
+/// terminal DB status (instead of being stuck at `running` until restart). The
+/// `WHERE status NOT IN (...)` guard makes this safe against a helper that just
+/// completed in the same instant cancellation fired.
+pub async fn mark_interrupted_if_active(
+    pool: &SqlitePool,
+    id: &str,
+    error_summary: &str,
+) -> Result<bool, AppError> {
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        "UPDATE run_helpers
+         SET status = 'interrupted',
+             error_summary = COALESCE(error_summary, ?),
+             finished_at = ?
+         WHERE id = ?
+           AND status NOT IN ('completed', 'failed', 'interrupted', 'cancelled')
+           AND finished_at IS NULL",
+    )
+    .bind(error_summary)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 /// Mark all non-terminal run helpers as interrupted (crash recovery).
@@ -367,9 +403,10 @@ mod tests {
         insert(&pool, &helper).await.unwrap();
 
         let usage = default_usage();
-        mark_failed(&pool, "h-1", "Something broke", false, &usage)
+        let marked = mark_failed(&pool, "h-1", "Something broke", false, &usage)
             .await
             .unwrap();
+        assert!(marked, "running helper should transition to failed");
 
         let row = sqlx::query(
             "SELECT status, error_summary, finished_at FROM run_helpers WHERE id = 'h-1'",
@@ -414,6 +451,47 @@ mod tests {
             .unwrap();
         let status: String = row.get(0);
         assert_eq!(status, "interrupted");
+    }
+
+    #[tokio::test]
+    async fn mark_failed_is_noop_when_helper_already_terminal() {
+        let pool = setup_test_pool().await;
+        let helper = RunHelperInsert {
+            id: "h-1".into(),
+            run_id: "run-1".into(),
+            thread_id: "t1".into(),
+            helper_kind: "explore".into(),
+            parent_tool_call_id: None,
+            status: "running".into(),
+            model_role: "auxiliary".into(),
+            provider_id: None,
+            model_id: None,
+            input_summary: None,
+        };
+        insert(&pool, &helper).await.unwrap();
+
+        // Simulate live cancellation flipping the helper to interrupted first.
+        let first = mark_interrupted_if_active(&pool, "h-1", "cancelled by run")
+            .await
+            .unwrap();
+        assert!(first);
+
+        // A subsequent mark_failed from the aborted helper's own cleanup must be
+        // a no-op and must not overwrite the cancellation error summary.
+        let usage = default_usage();
+        let marked = mark_failed(&pool, "h-1", "aborted", true, &usage)
+            .await
+            .unwrap();
+        assert!(!marked, "already-terminal helper must not be re-marked");
+
+        let row = sqlx::query("SELECT status, error_summary FROM run_helpers WHERE id = 'h-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let status: String = row.get(0);
+        let error: String = row.get(1);
+        assert_eq!(status, "interrupted");
+        assert_eq!(error, "cancelled by run");
     }
 
     #[tokio::test]
@@ -469,6 +547,120 @@ mod tests {
                     .get(0);
             assert_eq!(status, expected, "{id} status should remain '{expected}'");
         }
+    }
+
+    #[tokio::test]
+    async fn mark_interrupted_if_active_flips_running_helper() {
+        let pool = setup_test_pool().await;
+        let helper = RunHelperInsert {
+            id: "h-1".into(),
+            run_id: "run-1".into(),
+            thread_id: "t1".into(),
+            helper_kind: "explore".into(),
+            parent_tool_call_id: None,
+            status: "running".into(),
+            model_role: "auxiliary".into(),
+            provider_id: None,
+            model_id: None,
+            input_summary: None,
+        };
+        insert(&pool, &helper).await.unwrap();
+
+        let marked = mark_interrupted_if_active(&pool, "h-1", "cancelled mid-flight")
+            .await
+            .unwrap();
+        assert!(marked, "running helper should be flipped to interrupted");
+
+        let row = sqlx::query(
+            "SELECT status, error_summary, finished_at FROM run_helpers WHERE id = 'h-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let status: String = row.get(0);
+        let error: String = row.get(1);
+        let finished: Option<String> = row.get(2);
+        assert_eq!(status, "interrupted");
+        assert_eq!(error, "cancelled mid-flight");
+        assert!(finished.is_some());
+    }
+
+    #[tokio::test]
+    async fn mark_interrupted_if_active_is_noop_for_terminal_helpers() {
+        let pool = setup_test_pool().await;
+        for (id, status) in &[
+            ("h-completed", "completed"),
+            ("h-failed", "failed"),
+            ("h-interrupted", "interrupted"),
+            ("h-cancelled", "cancelled"),
+        ] {
+            let helper = RunHelperInsert {
+                id: id.to_string(),
+                run_id: "run-1".into(),
+                thread_id: "t1".into(),
+                helper_kind: "review".into(),
+                parent_tool_call_id: None,
+                status: status.to_string(),
+                model_role: "auxiliary".into(),
+                provider_id: None,
+                model_id: None,
+                input_summary: None,
+            };
+            insert(&pool, &helper).await.unwrap();
+        }
+
+        for (id, expected) in [
+            ("h-completed", "completed"),
+            ("h-failed", "failed"),
+            ("h-interrupted", "interrupted"),
+            ("h-cancelled", "cancelled"),
+        ] {
+            let marked = mark_interrupted_if_active(&pool, id, "should not apply")
+                .await
+                .unwrap();
+            assert!(!marked, "{id} is terminal and must not be re-marked");
+            let status: String =
+                sqlx::query(&format!("SELECT status FROM run_helpers WHERE id = '{id}'"))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+                    .get(0);
+            assert_eq!(status, expected, "{id} status should remain '{expected}'");
+        }
+    }
+
+    #[tokio::test]
+    async fn mark_interrupted_if_active_preserves_existing_error_summary() {
+        let pool = setup_test_pool().await;
+        let helper = RunHelperInsert {
+            id: "h-1".into(),
+            run_id: "run-1".into(),
+            thread_id: "t1".into(),
+            helper_kind: "explore".into(),
+            parent_tool_call_id: None,
+            status: "running".into(),
+            model_role: "auxiliary".into(),
+            provider_id: None,
+            model_id: None,
+            input_summary: None,
+        };
+        insert(&pool, &helper).await.unwrap();
+        sqlx::query("UPDATE run_helpers SET error_summary = 'original detail' WHERE id = 'h-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let marked = mark_interrupted_if_active(&pool, "h-1", "fallback message")
+            .await
+            .unwrap();
+        assert!(marked);
+
+        let error: String = sqlx::query("SELECT error_summary FROM run_helpers WHERE id = 'h-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(error, "original detail");
     }
 
     #[tokio::test]

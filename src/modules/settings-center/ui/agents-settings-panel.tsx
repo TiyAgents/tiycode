@@ -38,6 +38,13 @@ import { Input } from "@/shared/ui/input";
 import { Separator } from "@/shared/ui/separator";
 import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/ui/select";
 
 const TOOL_CATEGORIES: Array<{ labelKey: TranslationKey; tools: string[] }> = [
   {
@@ -477,25 +484,34 @@ export function AgentsSettingsPanel({
                 onCheckedChange={(checked) => updateField("canDelegate", checked)}
               />
             </div>
-            <label className="space-y-1.5">
-              <span className="text-[12px] font-medium text-app-foreground">
-                {t("settings.agents.maxDelegationDepth")}
-              </span>
-              <select
-                className="w-full rounded-lg border border-app-border bg-app-surface-muted px-3 py-2 text-[13px] text-app-foreground"
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-app-border bg-app-surface-muted px-3 py-2.5">
+              <div className="min-w-0">
+                <span className="text-[13px] font-medium text-app-foreground">
+                  {t("settings.agents.maxDelegationDepth")}
+                </span>
+                <span className="mt-0.5 block text-[12px] font-normal leading-5 text-app-muted">
+                  {t("settings.agents.maxDelegationDepthDesc")}
+                </span>
+              </div>
+              <Select
                 value={String((currentValue("maxDelegationDepth") as number) ?? 3)}
-                onChange={(e) => updateField("maxDelegationDepth", Number(e.target.value))}
+                onValueChange={(value) => updateField("maxDelegationDepth", Number(value))}
               >
-                {[1, 2, 3, 4, 5].map((depth) => (
-                  <option key={depth} value={depth}>
-                    {depth}
-                  </option>
-                ))}
-              </select>
-              <span className="block text-[11px] text-app-subtle">
-                {t("settings.agents.maxDelegationDepthDesc")}
-              </span>
-            </label>
+                <SelectTrigger
+                  className="w-[72px] rounded-lg border-app-border bg-app-surface px-2.5 py-1.5 text-[13px] text-app-foreground shadow-none hover:bg-app-surface-hover focus-visible:border-app-info/40 focus-visible:ring-app-info/10"
+                  size="sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {[1, 2, 3, 4, 5].map((depth) => (
+                    <SelectItem key={depth} value={String(depth)}>
+                      {depth}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </FieldGroup>
 
           <Separator />
