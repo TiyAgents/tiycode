@@ -608,6 +608,16 @@ describe("goalEvaluate", () => {
     expect(result).toBeNull();
   });
 
+  it("passes through the skipped verdict for already-accepted goals", async () => {
+    isTauriMock.mockReturnValue(true);
+    const result = makeGoalEvaluateResult({ verdict: "skipped", continuationPrompt: null });
+    invokeMock.mockResolvedValueOnce(result);
+
+    const outcome = await goalEvaluate("thread-1");
+    expect(outcome!.verdict).toBe("skipped");
+    expect(outcome!.continuationPrompt).toBeNull();
+  });
+
   it("requires Tauri runtime", async () => {
     isTauriMock.mockReturnValue(false);
 
