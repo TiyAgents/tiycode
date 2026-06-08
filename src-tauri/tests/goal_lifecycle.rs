@@ -453,7 +453,10 @@ mod tests {
             Some("run-judge-1")
         );
 
-        // A verified goal stops continuation.
+        // A verified goal stops continuation, but the terminal run that
+        // achieved the goal is still accounted exactly once so the finished
+        // turn count matches what was shown while the run was active.
+        let turns_before = updated.turns_used;
         let outcome = mgr
             .evaluate_after_run("run-after", None)
             .await
@@ -461,6 +464,16 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.verdict, "skipped");
         assert!(outcome.continuation_prompt.is_none());
+        assert_eq!(outcome.goal.turns_used, turns_before + 1);
+
+        // Re-evaluating the same terminal run is idempotent (no double count).
+        let outcome_again = mgr
+            .evaluate_after_run("run-after", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome_again.verdict, "skipped");
+        assert_eq!(outcome_again.goal.turns_used, turns_before + 1);
     }
 
     #[tokio::test]

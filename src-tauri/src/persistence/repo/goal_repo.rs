@@ -190,6 +190,39 @@ pub async fn mark_evaluated_if_needed(
     Ok(result.rows_affected() > 0)
 }
 
+/// Idempotently account one goal turn for a run, regardless of the goal's
+/// current status. Increments `turns_used` and stamps `last_evaluated_run_id`
+/// only when this run has not already been counted for the goal. Returns true
+/// when a turn was actually accounted.
+///
+/// Unlike `mark_evaluated_if_needed` (which only stamps the run id for *active*
+/// goals as part of the continuation evaluation claim), this also covers the
+/// case where a Judge flips the goal to `complete` inside the same run: the
+/// terminal-run evaluation early-returns without ever billing that final turn,
+/// so the run-level turn would otherwise be lost. Counting here keeps the
+/// running-vs-finished turn display consistent.
+pub async fn account_turn_if_unevaluated(
+    pool: &SqlitePool,
+    id: &str,
+    run_id: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE goals SET \
+         turns_used = turns_used + 1, \
+         last_evaluated_run_id = ?, \
+         updated_at = ? \
+         WHERE id = ? \
+           AND (last_evaluated_run_id IS NULL OR last_evaluated_run_id != ?)",
+    )
+    .bind(run_id)
+    .bind(Utc::now().to_rfc3339())
+    .bind(id)
+    .bind(run_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 pub async fn delete(pool: &SqlitePool, id: &str) -> Result<bool, AppError> {
     let result = sqlx::query("DELETE FROM goals WHERE id = ?")
         .bind(id)
