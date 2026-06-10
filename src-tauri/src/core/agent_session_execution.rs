@@ -1612,8 +1612,10 @@ impl AgentSession {
         tool_call_storage_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
-        // Parse the main agent's task / rationale.
-        let request = match crate::core::subagent::JudgeRequest::from_tool_input(tool_input) {
+        // Parse the main agent's task / rationale. The task value is no longer
+        // injected into the Judge prompt — the Judge evaluates independently.
+        // Parsing is retained for backward compatibility and input validation.
+        let _request = match crate::core::subagent::JudgeRequest::from_tool_input(tool_input) {
             Ok(request) => request,
             Err(error) => {
                 tool_call_repo::update_result(
@@ -1679,41 +1681,34 @@ impl AgentSession {
             return agent_error_result(err_msg);
         }
 
-        // Build the Judge task: inject the goal objective + status + last verdict
-        // so the Judge does not rely on the main agent's self-report.
-        let mut prior_verdict = String::new();
-        if goal.judge_evaluated_run_id.is_some() {
-            if let Some(summary) = goal.judge_summary.as_deref() {
-                if !summary.trim().is_empty() {
-                    prior_verdict.push_str(&format!("\nPrevious Judge summary: {summary}"));
-                }
-            }
-            if let Some(findings_json) = goal.judge_findings.as_deref() {
-                if let Ok(findings) = serde_json::from_str::<Vec<String>>(findings_json) {
-                    if !findings.is_empty() {
-                        prior_verdict.push_str("\nPrevious Judge findings:");
-                        for finding in findings {
-                            prior_verdict.push_str(&format!("\n- {finding}"));
-                        }
-                    }
-                }
-            }
-        }
+        // Build the Judge task: inject only the goal objective, task board
+        // state, and (if applicable) process compliance evidence. The Judge
+        // receives no input from the main agent — it evaluates the project
+        // state independently against the goal.
+
+        // Query task board state for cross-reference.
+        let task_board_summary = build_task_board_summary(&self.pool, &goal.thread_id).await;
+
+        // Conditionally include process compliance layer for goals that
+        // require reviews or phase-by-phase verification.
+        let process_compliance = if has_process_requirements(&goal.objective) {
+            build_process_compliance_summary(&self.pool, &goal.thread_id).await
+        } else {
+            String::new()
+        };
 
         let judge_task = format!(
             "You are verifying acceptance of the following goal for the current project.\n\n\
-Goal id: {goal_id}\n\
-Goal status: {status:?}\n\
-Goal objective:\n{objective}\n\
-{prior_verdict}\n\n\
-The main agent's note for this verification request:\n{task}\n\n\
+Goal objective:\n{objective}\n\n\
+{task_board_summary}\n\
+{process_compliance}\
 Independently inspect the project's current state and decide whether it satisfies the goal. \
+You must verify ALL requirements in the goal, not just those that seem to have been worked on. \
+Cross-reference the task board state above with your file-system findings. \
 Return your structured JudgeReport verdict.",
-            goal_id = goal.id,
-            status = goal.status,
             objective = goal.objective,
-            prior_verdict = prior_verdict,
-            task = request.task,
+            task_board_summary = task_board_summary,
+            process_compliance = process_compliance,
         );
 
         // Build a Judge delegate (depth 2, primary model) and run it.
@@ -1835,6 +1830,147 @@ Return your structured JudgeReport verdict.",
             })),
         }
     }
+}
+
+/// Build a human-readable summary of the task board state for the Judge.
+/// Returns a string describing each step and its stage, or a note that no
+/// task board exists.
+async fn build_task_board_summary(pool: &sqlx::SqlitePool, thread_id: &str) -> String {
+    use crate::persistence::repo::{task_board_repo, task_item_repo};
+
+    let boards = match task_board_repo::list_by_thread(pool, thread_id).await {
+        Ok(boards) => boards,
+        Err(_) => return "(No task board data available.)\n".to_string(),
+    };
+
+    if boards.is_empty() {
+        return "(No task board exists for this goal. Verify entirely from file system and goal text.)\n"
+            .to_string();
+    }
+
+    let mut summary = String::from("## Associated task board state\n\n");
+    for board in &boards {
+        summary.push_str(&format!(
+            "**{}** (status: {}):\n",
+            board.title,
+            board.status.as_str()
+        ));
+
+        let items = match task_item_repo::list_by_task_board(pool, &board.id).await {
+            Ok(items) => items,
+            Err(_) => {
+                summary.push_str("  (Could not load task items.)\n");
+                continue;
+            }
+        };
+
+        if items.is_empty() {
+            summary.push_str("  (No task items.)\n");
+            continue;
+        }
+
+        for item in &items {
+            summary.push_str(&format!(
+                "  - [{}] {}\n",
+                item.stage.as_str(),
+                item.description
+            ));
+        }
+    }
+
+    summary.push_str(
+        "\n**Important**: Any step above that is not `completed` and maps to a goal \
+         requirement is evidence of incomplete work. Report these as findings.\n",
+    );
+    summary
+}
+
+/// Check whether the goal objective contains process requirements (e.g.,
+/// "review each phase", "每阶段验收"). When true, the Judge prompt will
+/// include a process compliance layer showing the thread's review call history.
+fn has_process_requirements(objective: &str) -> bool {
+    let lower = objective.to_lowercase();
+    let keywords = [
+        "review",
+        "验收",
+        "检查",
+        "verify each",
+        "verify every",
+        "per phase",
+        "每个阶段",
+        "每一阶段",
+        "每轮",
+        "阶段完成",
+    ];
+    keywords.iter().any(|kw| lower.contains(&kw.to_lowercase()))
+}
+
+/// Build a process compliance summary from the thread's run_helper history.
+/// Lists all review-related helper calls chronologically with their input
+/// summaries and status. Only meaningful when the goal objective contains
+/// process requirements (e.g., "each phase must have a review").
+async fn build_process_compliance_summary(pool: &sqlx::SqlitePool, thread_id: &str) -> String {
+    use crate::persistence::repo::run_helper_repo;
+
+    let helpers = match run_helper_repo::list_by_thread_id(pool, thread_id).await {
+        Ok(h) => h,
+        Err(_) => return String::new(),
+    };
+
+    // Filter for review-related calls: agent_review, helper_review
+    let reviews: Vec<_> = helpers
+        .iter()
+        .filter(|h| h.helper_kind.contains("review"))
+        .collect();
+
+    if reviews.is_empty() {
+        return format!(
+            "## Process compliance\n\n\
+            No review calls found in thread history. \
+            If the goal requires reviews, this is evidence of non-compliance.\n\n"
+        );
+    }
+
+    let mut summary = String::from("## Process compliance\n\n");
+    summary.push_str("The following review calls were recorded during this goal:\n\n");
+
+    for (i, review) in reviews.iter().enumerate() {
+        let status_label = match review.status.as_str() {
+            "completed" => "✓ completed",
+            "failed" => "✗ failed",
+            "interrupted" => "⚠ interrupted",
+            _ => &review.status,
+        };
+
+        let input_preview = review
+            .input_summary
+            .as_deref()
+            .map(|s| {
+                // Truncate to first 200 chars for readability
+                if s.len() > 200 {
+                    format!("{}...", &s[..200])
+                } else {
+                    s.to_string()
+                }
+            })
+            .unwrap_or_else(|| "(no task description)".to_string());
+
+        summary.push_str(&format!(
+            "{}. `{}` called at {} (status: {})\n   Scope: {}\n",
+            i + 1,
+            review.helper_kind,
+            &review.started_at[..review.started_at.len().min(19)],
+            status_label,
+            input_preview,
+        ));
+    }
+
+    summary.push_str(
+        "\n**Guidance**: If the goal requires reviews at specific milestones \
+         (e.g., \"after each phase\"), verify that the review calls above \
+         cover all required milestones. Missing or failed reviews are findings.\n\n",
+    );
+    summary
 }
 
 #[cfg(test)]

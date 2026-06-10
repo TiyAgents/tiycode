@@ -235,6 +235,27 @@ pub async fn list_by_run_ids(
     Ok(rows.into_iter().map(RunHelperRow::into_dto).collect())
 }
 
+/// List all run_helpers for a given thread. Used by the Judge's process
+/// compliance layer to inspect review call history.
+pub async fn list_by_thread_id(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Vec<RunHelperDto>, AppError> {
+    let rows = sqlx::query_as::<_, RunHelperRow>(
+        "SELECT id, run_id, thread_id, helper_kind, parent_tool_call_id, status,
+                input_summary, output_summary, error_summary, started_at, finished_at,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens
+         FROM run_helpers
+         WHERE thread_id = ?
+         ORDER BY started_at ASC, id ASC",
+    )
+    .bind(thread_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(RunHelperRow::into_dto).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,6 +713,41 @@ mod tests {
         let kinds: Vec<String> = result.iter().map(|h| h.helper_kind.clone()).collect();
         assert!(kinds.contains(&"review".into()));
         assert!(kinds.contains(&"explore".into()));
+    }
+
+    #[tokio::test]
+    async fn list_by_thread_id_returns_helpers_for_thread() {
+        let pool = setup_test_pool().await;
+
+        // Insert helpers for the test thread
+        for (id, kind) in &[("h-1", "helper_review"), ("h-2", "helper_explore")] {
+            let helper = RunHelperInsert {
+                id: id.to_string(),
+                run_id: "run-1".into(),
+                thread_id: "t1".into(),
+                helper_kind: kind.to_string(),
+                parent_tool_call_id: None,
+                status: "completed".into(),
+                model_role: "auxiliary".into(),
+                provider_id: None,
+                model_id: None,
+                input_summary: Some(format!("{kind} task")),
+            };
+            insert(&pool, &helper).await.unwrap();
+        }
+
+        let result = list_by_thread_id(&pool, "t1").await.unwrap();
+        assert_eq!(result.len(), 2);
+        let kinds: Vec<String> = result.iter().map(|h| h.helper_kind.clone()).collect();
+        assert!(kinds.contains(&"helper_review".into()));
+        assert!(kinds.contains(&"helper_explore".into()));
+    }
+
+    #[tokio::test]
+    async fn list_by_thread_id_returns_empty_for_unknown_thread() {
+        let pool = setup_test_pool().await;
+        let result = list_by_thread_id(&pool, "t-unknown").await.unwrap();
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
