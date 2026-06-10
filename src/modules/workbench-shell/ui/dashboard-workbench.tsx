@@ -1097,7 +1097,7 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                               <p className="mt-1 whitespace-nowrap text-[11px] text-app-muted">
                                 In{" "}
                                 {formatCompactTokenCount(
-                                  contextBadge.inputTokens,
+                                  contextBadge.effectiveInputTokens,
                                 )}{" "}
                                 · Out{" "}
                                 {formatCompactTokenCount(

@@ -1157,6 +1157,17 @@ export function RuntimeThreadSurface({
           outputTokens: event.usage.outputTokens,
           cacheReadTokens: event.usage.cacheReadTokens,
           cacheWriteTokens: event.usage.cacheWriteTokens,
+          // Prefer the cross-protocol unified `contextSize` from
+          // tiycore 0.2.10-rc.2 (= input + output + cache_read +
+          // cache_write). Fall back to that sum when the field is missing
+          // (older payloads or hand-crafted events).
+          contextSize:
+            event.usage.contextSize > 0
+              ? event.usage.contextSize
+              : event.usage.inputTokens +
+                event.usage.outputTokens +
+                event.usage.cacheReadTokens +
+                event.usage.cacheWriteTokens,
           totalTokens: event.usage.totalTokens,
           modelDisplayName: event.modelDisplayName,
           runId: event.runId,

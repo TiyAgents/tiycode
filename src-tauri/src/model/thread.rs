@@ -296,6 +296,20 @@ impl From<MessageRecord> for MessageDto {
 // RunSummary — lightweight run info for snapshots
 // ---------------------------------------------------------------------------
 
+/// Per-run token usage snapshot sent to the frontend.
+///
+/// `total_tokens` carries the **wire-level** value reported by the provider
+/// (e.g. OpenAI/Google: `prompt + completion`; Anthropic: `input + output`).
+/// It is preserved unchanged for backwards compatibility with downstream
+/// billing/reporting consumers that need the wire-level total.
+///
+/// `context_size` is the **cross-protocol unified** "context occupancy"
+/// value, derived from `tiycore::types::Usage::context_size()` =
+/// `input + output + cache_read + cache_write`. Frontend code that asks
+/// "how much of the context window are we using?" MUST read `context_size`,
+/// not `total_tokens` — the latter no longer represents occupancy once we
+/// accumulate usage across turns (the wire-level field is per-response, not
+/// cumulative).
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunUsageDto {
@@ -303,7 +317,12 @@ pub struct RunUsageDto {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
+    /// Wire-level total reported by the provider (per-response, not cumulative).
     pub total_tokens: u64,
+    /// Cross-protocol unified context occupancy:
+    /// `input + output + cache_read + cache_write`. Use this for any
+    /// "context used" display or trigger logic.
+    pub context_size: u64,
 }
 
 impl From<tiycore::types::Usage> for RunUsageDto {
@@ -314,6 +333,7 @@ impl From<tiycore::types::Usage> for RunUsageDto {
             cache_read_tokens: value.cache_read,
             cache_write_tokens: value.cache_write,
             total_tokens: value.total_tokens,
+            context_size: value.context_size(),
         }
     }
 }

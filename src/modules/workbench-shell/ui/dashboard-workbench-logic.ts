@@ -138,18 +138,31 @@ export function buildThreadContextBadgeData(options: {
   const contextWindow =
     parseTokenCount(options.fallbackContextWindow) ??
     parseTokenCount(options.runtimeUsage?.contextWindow);
-  const totalTokens = options.runtimeUsage?.totalTokens ?? 0;
+  // Use the cross-protocol unified `contextSize` (= input + output +
+  // cache_read + cache_write) as the "context occupancy" figure for the
+  // badge. This is what tiycore 0.2.10-rc.2 exposes via
+  // `Usage::context_size()` and works consistently across OpenAI /
+  // Anthropic / Google. `totalTokens` is intentionally NOT used here — it
+  // is the wire-level per-response total and is provider-dependent
+  // (OpenAI/Google: prompt+completion; Anthropic: input+output+cache).
+  const contextSize = options.runtimeUsage?.contextSize ?? 0;
   const inputTokens = options.runtimeUsage?.inputTokens ?? 0;
   const outputTokens = options.runtimeUsage?.outputTokens ?? 0;
   const cacheReadTokens = options.runtimeUsage?.cacheReadTokens ?? 0;
   const cacheWriteTokens = options.runtimeUsage?.cacheWriteTokens ?? 0;
+  const totalTokens = options.runtimeUsage?.totalTokens ?? 0;
+  // Anthropic / ZenMux(Anthropic) report cache reads as a separate bucket, but
+  // they still count against the prompt context window and the provider's input
+  // billing. Surface the combined "input" figure (raw input + cache hits) so
+  // the header's `In … · Out …` numbers match the `used / total` total above.
+  const effectiveInputTokens = inputTokens + cacheReadTokens;
   const rawUsedPercent =
     contextWindow && contextWindow > 0
-      ? Math.round((totalTokens / contextWindow) * 100)
+      ? Math.round((contextSize / contextWindow) * 100)
       : 0;
   const usageRatio =
     contextWindow && contextWindow > 0
-      ? Math.min(totalTokens / contextWindow, 1)
+      ? Math.min(contextSize / contextWindow, 1)
       : 0;
   const usedPercent =
     contextWindow && contextWindow > 0
@@ -157,7 +170,7 @@ export function buildThreadContextBadgeData(options: {
       : 0;
   const leftPercent = Math.max(0, 100 - rawUsedPercent);
   const isExceeded = Boolean(
-    contextWindow && contextWindow > 0 && totalTokens > contextWindow,
+    contextWindow && contextWindow > 0 && contextSize > contextWindow,
   );
 
   return {
@@ -166,6 +179,7 @@ export function buildThreadContextBadgeData(options: {
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
+    effectiveInputTokens,
     isExceeded,
     leftPercent,
     modelDisplayName:
@@ -174,8 +188,11 @@ export function buildThreadContextBadgeData(options: {
       null,
     rawUsedPercent,
     totalTokens,
+    // New: expose the source of truth for the percentage so consumers can
+    // label the figure precisely.
+    contextSize,
     usageRatio,
-    usedLabel: formatCompactTokenCount(totalTokens),
+    usedLabel: formatCompactTokenCount(contextSize),
     totalLabel: contextWindow ? formatCompactTokenCount(contextWindow) : "N/A",
     usedPercent,
   };

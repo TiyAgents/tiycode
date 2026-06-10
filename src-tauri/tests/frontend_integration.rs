@@ -558,6 +558,10 @@ fn test_all_events_have_type_field() {
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
                 total_tokens: 22,
+                // Mirrors `Usage::context_size()` from tiycore 0.2.10-rc.2
+                // (= input + output + cache_read + cache_write = 10 + 12
+                // + 0 + 0 = 22).
+                context_size: 22,
             },
         },
         ThreadStreamEvent::RunCheckpointed { run_id: "r".into() },

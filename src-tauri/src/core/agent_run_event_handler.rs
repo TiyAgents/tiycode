@@ -415,6 +415,17 @@ impl AgentRunManager {
                 }
             }
             ThreadStreamEvent::ThreadUsageUpdated { usage, .. } => {
+                // `usage` here is a `RunUsageDto` populated by tiycore via
+                // `From<tiycore::types::Usage>`. Its `context_size` field is
+                // the cross-protocol unified "context occupancy" value
+                // (`Usage::context_size()` = input + output + cache_read +
+                // cache_write), NOT the wire-level `total_tokens` (which is
+                // per-response and provider-dependent). We round-trip the
+                // whole struct (input/output/cache fields + total_tokens)
+                // through `tiycore::types::Usage` because the persistence
+                // layer is typed against `Usage`; `context_size` is
+                // re-derived inside the `From` impl on read, so storing only
+                // the raw fields is sufficient and forward-compatible.
                 let usage = tiycore::types::Usage {
                     input: usage.input_tokens,
                     output: usage.output_tokens,
