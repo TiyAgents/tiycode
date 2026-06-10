@@ -1614,21 +1614,19 @@ impl AgentSession {
     ) -> AgentToolResult {
         // Parse the main agent's task / rationale. The task value is no longer
         // injected into the Judge prompt — the Judge evaluates independently.
-        // Parsing is retained for backward compatibility and input validation.
-        let _request = match crate::core::subagent::JudgeRequest::from_tool_input(tool_input) {
-            Ok(request) => request,
-            Err(error) => {
-                tool_call_repo::update_result(
-                    &self.pool,
-                    tool_call_storage_id,
-                    &serde_json::json!({ "error": &error }).to_string(),
-                    "failed",
-                )
-                .await
-                .ok();
-                return agent_error_result(error);
-            }
-        };
+        // Parsing is retained for input validation only (rejects non-string
+        // task values that would violate the tool JSON schema).
+        if let Err(error) = crate::core::subagent::JudgeRequest::from_tool_input(tool_input) {
+            tool_call_repo::update_result(
+                &self.pool,
+                tool_call_storage_id,
+                &serde_json::json!({ "error": &error }).to_string(),
+                "failed",
+            )
+            .await
+            .ok();
+            return agent_error_result(error);
+        }
 
         // Backstop: re-query goal state. agent_judge is injected only when an
         // un-verified goal exists, but a stale tool set or a direct call must be
@@ -1850,6 +1848,10 @@ async fn build_task_board_summary(pool: &sqlx::SqlitePool, thread_id: &str) -> S
 
     let mut summary = String::from("## Associated task board state\n\n");
     for board in &boards {
+        // Skip abandoned boards — they are not relevant to the current goal.
+        if board.status.as_str() == "abandoned" {
+            continue;
+        }
         summary.push_str(&format!(
             "**{}** (status: {}):\n",
             board.title,
@@ -1946,9 +1948,10 @@ async fn build_process_compliance_summary(pool: &sqlx::SqlitePool, thread_id: &s
             .input_summary
             .as_deref()
             .map(|s| {
-                // Truncate to first 200 chars for readability
-                if s.len() > 200 {
-                    format!("{}...", &s[..200])
+                // Truncate to first 200 chars for readability (character-safe,
+                // avoids panicking on multi-byte UTF-8 sequences).
+                if s.chars().count() > 200 {
+                    format!("{}...", s.chars().take(200).collect::<String>())
                 } else {
                     s.to_string()
                 }

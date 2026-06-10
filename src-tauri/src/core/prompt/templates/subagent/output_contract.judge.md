@@ -1,6 +1,6 @@
 ---
 section_id: SubagentOutputContractJudge
-version: 2
+version: 1
 declared_keys: []
 ---
 Your output will be consumed by the parent agent and the goal acceptance pipeline, not the user. Follow any response language instructions inherited above for natural-language fields (`findings`, `summary`).

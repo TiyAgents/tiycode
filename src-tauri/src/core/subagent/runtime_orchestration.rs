@@ -356,10 +356,9 @@ impl RuntimeOrchestrationTool {
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "Explain why you believe the goal is achieved and call out anything the Judge should focus on (e.g. acceptance criteria, areas you are unsure about). If you are re-verifying after fixing earlier findings, summarize what you changed."
+                        "description": "Optional note for the Judge. The Judge evaluates the project state independently against the goal and does not rely on your self-assessment."
                     }
-                },
-                "required": ["task"]
+                }
             }),
         };
 
