@@ -172,6 +172,12 @@ export function buildThreadContextBadgeData(options: {
   const isExceeded = Boolean(
     contextWindow && contextWindow > 0 && contextSize > contextWindow,
   );
+  // Compression trigger threshold. The backend reserves 20% of the model's
+  // context window (src-tauri/src/core/context_compression.rs) and triggers
+  // auto-compression when the observed `context_size` exceeds the
+  // remaining 80% budget. Mirror that ratio here so the header pill can
+  // draw a hint marker at the same boundary the runtime uses.
+  const compressionThresholdRatio = 0.8;
 
   return {
     contextWindow,
@@ -195,6 +201,7 @@ export function buildThreadContextBadgeData(options: {
     usedLabel: formatCompactTokenCount(contextSize),
     totalLabel: contextWindow ? formatCompactTokenCount(contextWindow) : "N/A",
     usedPercent,
+    compressionThresholdRatio,
   };
 }
 
