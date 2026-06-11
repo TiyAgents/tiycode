@@ -1612,10 +1612,12 @@ impl AgentSession {
         tool_call_storage_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
-        // Parse the main agent's task / rationale. The task value is no longer
-        // injected into the Judge prompt — the Judge evaluates independently.
-        // Parsing is retained for input validation only (rejects non-string
-        // task values that would violate the tool JSON schema).
+        // Validate the tool input shape. The main agent's optional note is
+        // not injected into the Judge prompt — the Judge evaluates the
+        // project state independently against the goal. Parsing is retained
+        // to reject malformed input (e.g. non-string `task` values) that
+        // would violate the tool JSON schema. A missing `task` is acceptable
+        // and falls back to a neutral default.
         if let Err(error) = crate::core::subagent::JudgeRequest::from_tool_input(tool_input) {
             tool_call_repo::update_result(
                 &self.pool,
@@ -1679,10 +1681,14 @@ impl AgentSession {
             return agent_error_result(err_msg);
         }
 
-        // Build the Judge task: inject only the goal objective, task board
-        // state, and (if applicable) process compliance evidence. The Judge
+        // Build the Judge task: inject the goal objective, the task board
+        // state, (when applicable) process compliance evidence, and (when
+        // this is a re-verification) the previous Judge verdict. The Judge
         // receives no input from the main agent — it evaluates the project
-        // state independently against the goal.
+        // state independently against the goal. The previous verdict is
+        // included only as objective context so the Judge can confirm prior
+        // findings have actually been addressed, not as a starting point
+        // for a self-assessment.
 
         // Query task board state for cross-reference.
         let task_board_summary = build_task_board_summary(&self.pool, &goal.thread_id).await;
@@ -1695,18 +1701,48 @@ impl AgentSession {
             String::new()
         };
 
+        // On re-verification, surface the prior Judge verdict as objective
+        // context so the Judge can confirm each prior finding has been
+        // genuinely resolved. This is read from the goal record (not from
+        // the main agent) and is empty on the first verification.
+        let prior_verdict = if goal.judge_evaluated_run_id.is_some() {
+            let mut section = String::new();
+            if let Some(summary) = goal.judge_summary.as_deref() {
+                if !summary.trim().is_empty() {
+                    section.push_str(&format!("\nPrevious Judge summary: {summary}"));
+                }
+            }
+            if let Some(findings_json) = goal.judge_findings.as_deref() {
+                if let Ok(findings) = serde_json::from_str::<Vec<String>>(findings_json) {
+                    if !findings.is_empty() {
+                        section.push_str("\nPrevious Judge findings:");
+                        for finding in findings {
+                            section.push_str(&format!("\n- {finding}"));
+                        }
+                    }
+                }
+            }
+            section
+        } else {
+            String::new()
+        };
+
         let judge_task = format!(
             "You are verifying acceptance of the following goal for the current project.\n\n\
 Goal objective:\n{objective}\n\n\
-{task_board_summary}\n\
+{task_board_summary}\
 {process_compliance}\
+{prior_verdict}\n\
 Independently inspect the project's current state and decide whether it satisfies the goal. \
 You must verify ALL requirements in the goal, not just those that seem to have been worked on. \
 Cross-reference the task board state above with your file-system findings. \
+If this is a re-verification, confirm that every prior finding has been genuinely \
+resolved (do NOT accept claims of fix without verifying the actual change). \
 Return your structured JudgeReport verdict.",
             objective = goal.objective,
             task_board_summary = task_board_summary,
             process_compliance = process_compliance,
+            prior_verdict = prior_verdict,
         );
 
         // Build a Judge delegate (depth 2, primary model) and run it.

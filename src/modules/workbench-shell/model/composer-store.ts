@@ -1,5 +1,4 @@
 import { createStore, useStore as useStoreBase, shallowEqual } from "@/shared/lib/create-store";
-import type { RunMode } from "@/shared/types/api";
 import type { ComposerReferencedFile } from "@/modules/workbench-shell/model/composer-commands";
 
 // ---------------------------------------------------------------------------
@@ -28,8 +27,6 @@ export interface ComposerStoreState {
   [key: string]: unknown;
   /** Input value for new-thread mode. */
   newThreadValue: string;
-  /** Run mode for new threads (default / plan). */
-  newThreadRunMode: RunMode;
   /** @file references for new-thread composer. */
   newThreadReferencedFiles: ComposerReferencedFile[];
   /** Serialized attachment data for new-thread composer. */
@@ -46,7 +43,6 @@ export interface ComposerStoreState {
 
 export const composerStore = createStore<ComposerStoreState>({
   newThreadValue: "",
-  newThreadRunMode: "default",
   newThreadReferencedFiles: [],
   newThreadAttachmentData: [],
   drafts: {},
@@ -65,10 +61,6 @@ export { useStoreBase as useStore, shallowEqual };
 
 export function setNewThreadValue(value: string): void {
   composerStore.setState({ newThreadValue: value });
-}
-
-export function setNewThreadRunMode(mode: RunMode): void {
-  composerStore.setState({ newThreadRunMode: mode });
 }
 
 export function setNewThreadReferencedFiles(files: ReadonlyArray<ComposerReferencedFile>): void {

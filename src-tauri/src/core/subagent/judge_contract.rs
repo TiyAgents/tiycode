@@ -3,10 +3,11 @@ use serde::{Deserialize, Serialize};
 /// Input for the `agent_judge` tool (provided by the main agent).
 #[derive(Debug, Clone)]
 pub struct JudgeRequest {
-    /// The main agent's note for this verification request. No longer
-    /// injected into the Judge prompt — the Judge evaluates independently
-    /// against goal + file system + task board. Parsed for backward
-    /// compatibility but the value is discarded by execute_judge_tool.
+    /// An optional note from the main agent about this verification request.
+    /// The Judge evaluates the project state independently against the goal
+    /// and does not rely on this field as a self-assessment. Parsed for
+    /// input validation; if absent, the Judge still runs and the value is
+    /// discarded by `execute_judge_tool`.
     pub task: String,
 }
 
@@ -19,7 +20,7 @@ impl JudgeRequest {
             .trim()
             .to_string();
 
-        // Task is now optional; an empty task string is valid.
+        // Task is optional; an empty task string is valid.
         // The Judge does not receive the main agent's self-assessment.
         if task.is_empty() {
             return Ok(Self {

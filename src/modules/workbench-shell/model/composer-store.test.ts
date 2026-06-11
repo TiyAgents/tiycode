@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   composerStore,
   setNewThreadValue,
-  setNewThreadRunMode,
   setNewThreadReferencedFiles,
   setNewThreadAttachmentData,
   setDraft,
@@ -23,13 +22,6 @@ describe("composerStore", () => {
     it("should set new thread value", () => {
       setNewThreadValue("hello world");
       expect(composerStore.getState().newThreadValue).toBe("hello world");
-    });
-
-    it("should set new thread run mode", () => {
-      setNewThreadRunMode("plan");
-      expect(composerStore.getState().newThreadRunMode).toBe("plan");
-      setNewThreadRunMode("default");
-      expect(composerStore.getState().newThreadRunMode).toBe("default");
     });
 
     it("should clear new thread composer", () => {
