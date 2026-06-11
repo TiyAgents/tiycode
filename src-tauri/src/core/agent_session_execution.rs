@@ -1998,7 +1998,11 @@ async fn build_process_compliance_summary(pool: &sqlx::SqlitePool, thread_id: &s
             "{}. `{}` called at {} (status: {})\n   Scope: {}\n",
             i + 1,
             review.helper_kind,
-            &review.started_at[..review.started_at.len().min(19)],
+            // Truncate to first 19 chars (RFC3339 timestamp prefix) using
+            // char-aware slicing to avoid panicking on multi-byte UTF-8
+            // boundaries — mirrors the 200-char limit used on
+            // `input_preview` above.
+            review.started_at.chars().take(19).collect::<String>(),
             status_label,
             input_preview,
         ));
@@ -2314,5 +2318,81 @@ mod tests {
             provider_options: None,
             model,
         }
+    }
+}
+
+#[cfg(test)]
+mod has_process_requirements_tests {
+    use super::has_process_requirements;
+
+    #[test]
+    fn detects_english_keywords() {
+        for objective in [
+            "Each phase needs a code review before merge.",
+            "Verify every change against the spec.",
+            "Run a per phase smoke test.",
+        ] {
+            assert!(
+                has_process_requirements(objective),
+                "expected keyword match in: {objective}"
+            );
+        }
+    }
+
+    #[test]
+    fn detects_cjk_keywords() {
+        for objective in [
+            "每个阶段都需要验收",
+            "每一阶段检查通过",
+            "需要你每轮 review",
+            "完成所有阶段完成的任务",
+        ] {
+            assert!(
+                has_process_requirements(objective),
+                "expected CJK keyword match in: {objective}"
+            );
+        }
+    }
+
+    #[test]
+    fn records_substring_match_semantics() {
+        // The implementation is a plain case-insensitive substring match
+        // over a fixed keyword list. These cases pin down the current
+        // behaviour, including the substring-match quirk where "review"
+        // hits inside "preview". They are not assertions about an ideal
+        // matcher — they are regression guards against accidental keyword
+        // list changes. If the keyword list is later tightened, update
+        // this test alongside it.
+        assert!(
+            has_process_requirements("Preview the rendered HTML before shipping."),
+            "current implementation matches 'review' inside 'preview' (substring match)"
+        );
+        assert!(
+            !has_process_requirements("Forward-looking design without explicit verify step."),
+            "no keyword substring present"
+        );
+        // "审阅" (look over) is intentionally NOT a keyword — only
+        // "验收" (formal acceptance) and "检查" (check) are, so this
+        // should be rejected.
+        assert!(
+            !has_process_requirements("请仔细审阅代码风格。"),
+            "审阅 does not contain any current keyword"
+        );
+        assert!(
+            !has_process_requirements("Survey users about preferences."),
+            "no keyword substring present"
+        );
+    }
+
+    #[test]
+    fn empty_and_whitespace_objectives_return_false() {
+        assert!(!has_process_requirements(""));
+        assert!(!has_process_requirements("   \n\t  "));
+    }
+
+    #[test]
+    fn keyword_match_is_case_insensitive() {
+        assert!(has_process_requirements("Final REVIEW before release."));
+        assert!(has_process_requirements("Need a Verify Each phase step."));
     }
 }
