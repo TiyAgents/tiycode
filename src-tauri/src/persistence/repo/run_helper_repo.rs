@@ -46,6 +46,15 @@ impl RunHelperRow {
                 cache_read_tokens: self.cache_read_tokens.max(0) as u64,
                 cache_write_tokens: self.cache_write_tokens.max(0) as u64,
                 total_tokens: self.total_tokens.max(0) as u64,
+                // Reconstruct the cross-protocol unified context size
+                // from the persisted per-bucket fields. The DB schema
+                // doesn't store `context_size` (it would duplicate the
+                // four per-bucket fields); we derive it on read.
+                context_size: (self.input_tokens
+                    + self.output_tokens
+                    + self.cache_read_tokens
+                    + self.cache_write_tokens)
+                    .max(0) as u64,
             },
         }
     }
@@ -183,6 +192,62 @@ pub async fn mark_interrupted_if_active(
     .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Converge every still-active helper belonging to a single run onto a terminal
+/// `interrupted` state and return the rows that were actually transitioned.
+///
+/// Used as a backstop when a run reaches a terminal state (completed / failed /
+/// cancelled / interrupted) while one of its helpers is still non-terminal in
+/// the DB — e.g. a Judge subagent whose own cleanup future was dropped when the
+/// run was interrupted, leaving it stuck at `running`. Selecting the affected
+/// rows before the update lets the caller emit a matching `SubagentFailed`
+/// event so the live event stream converges too, not just the DB snapshot.
+pub async fn interrupt_non_terminal_by_run(
+    pool: &SqlitePool,
+    run_id: &str,
+    error_summary: &str,
+) -> Result<Vec<RunHelperDto>, AppError> {
+    let mut tx = pool.begin().await?;
+
+    let rows = sqlx::query_as::<_, RunHelperRow>(
+        "SELECT id, run_id, thread_id, helper_kind, parent_tool_call_id, status,
+                input_summary, output_summary, error_summary, started_at, finished_at,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens
+         FROM run_helpers
+         WHERE run_id = ?
+           AND status NOT IN ('completed', 'failed', 'interrupted', 'cancelled')
+           AND finished_at IS NULL
+         ORDER BY started_at ASC, id ASC",
+    )
+    .bind(run_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if rows.is_empty() {
+        tx.rollback().await?;
+        return Ok(Vec::new());
+    }
+
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE run_helpers
+         SET status = 'interrupted',
+             error_summary = COALESCE(error_summary, ?),
+             finished_at = ?
+         WHERE run_id = ?
+           AND status NOT IN ('completed', 'failed', 'interrupted', 'cancelled')
+           AND finished_at IS NULL",
+    )
+    .bind(error_summary)
+    .bind(&now)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(rows.into_iter().map(RunHelperRow::into_dto).collect())
 }
 
 /// Mark all non-terminal run helpers as interrupted (crash recovery).
@@ -547,6 +612,100 @@ mod tests {
                     .get(0);
             assert_eq!(status, expected, "{id} status should remain '{expected}'");
         }
+    }
+
+    #[tokio::test]
+    async fn interrupt_non_terminal_by_run_only_affects_target_run() {
+        let pool = setup_test_pool().await;
+
+        for (id, run_id, status) in &[
+            ("h-run1-running", "run-1", "running"),
+            ("h-run1-waiting", "run-1", "waiting_tool_result"),
+            ("h-run1-completed", "run-1", "completed"),
+            ("h-run2-running", "run-2", "running"),
+        ] {
+            let helper = RunHelperInsert {
+                id: id.to_string(),
+                run_id: run_id.to_string(),
+                thread_id: "t1".into(),
+                helper_kind: "helper_judge".into(),
+                parent_tool_call_id: None,
+                status: status.to_string(),
+                model_role: "auxiliary".into(),
+                provider_id: None,
+                model_id: None,
+                input_summary: None,
+            };
+            insert(&pool, &helper).await.unwrap();
+        }
+
+        let converged = interrupt_non_terminal_by_run(&pool, "run-1", "run ended")
+            .await
+            .unwrap();
+
+        // Only the two non-terminal run-1 helpers are returned.
+        let mut ids: Vec<String> = converged.iter().map(|h| h.id.clone()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["h-run1-running", "h-run1-waiting"]);
+
+        // run-1 non-terminal helpers are now interrupted with the error summary.
+        for id in ["h-run1-running", "h-run1-waiting"] {
+            let row = sqlx::query(&format!(
+                "SELECT status, error_summary, finished_at FROM run_helpers WHERE id = '{id}'"
+            ))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let status: String = row.get(0);
+            let error_summary: Option<String> = row.get(1);
+            let finished_at: Option<String> = row.get(2);
+            assert_eq!(status, "interrupted");
+            assert_eq!(error_summary.as_deref(), Some("run ended"));
+            assert!(finished_at.is_some());
+        }
+
+        // Already-terminal run-1 helper and the run-2 helper are untouched.
+        let completed: String =
+            sqlx::query("SELECT status FROM run_helpers WHERE id = 'h-run1-completed'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(completed, "completed");
+
+        let run2: String =
+            sqlx::query("SELECT status FROM run_helpers WHERE id = 'h-run2-running'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(run2, "running");
+    }
+
+    #[tokio::test]
+    async fn interrupt_non_terminal_by_run_returns_empty_when_all_terminal() {
+        let pool = setup_test_pool().await;
+
+        for (id, status) in &[("h-a", "completed"), ("h-b", "interrupted")] {
+            let helper = RunHelperInsert {
+                id: id.to_string(),
+                run_id: "run-1".into(),
+                thread_id: "t1".into(),
+                helper_kind: "helper_judge".into(),
+                parent_tool_call_id: None,
+                status: status.to_string(),
+                model_role: "auxiliary".into(),
+                provider_id: None,
+                model_id: None,
+                input_summary: None,
+            };
+            insert(&pool, &helper).await.unwrap();
+        }
+
+        let converged = interrupt_non_terminal_by_run(&pool, "run-1", "run ended")
+            .await
+            .unwrap();
+        assert!(converged.is_empty());
     }
 
     #[tokio::test]

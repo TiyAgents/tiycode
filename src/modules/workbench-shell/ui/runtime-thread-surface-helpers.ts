@@ -114,6 +114,8 @@ export function formatHelperKind(
       return "Explore Agent";
     case "helper_review":
       return "Review Agent";
+    case "helper_judge":
+      return "Judge Agent";
     default:
       if (kind.startsWith(CUSTOM_PREFIX)) {
         const slug = kind.slice(CUSTOM_PREFIX.length);

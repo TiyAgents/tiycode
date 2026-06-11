@@ -57,6 +57,10 @@ function makeSnapshot(activeStatus: RunStatus | null): ThreadSnapshotDto {
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
             totalTokens: 0,
+            // Cross-protocol unified context occupancy, defaulting to 0
+            // for an empty/seed snapshot. tiycore 0.2.10-rc.2 derives this
+            // as input + output + cache_read + cache_write.
+            contextSize: 0,
           },
         }
       : null,

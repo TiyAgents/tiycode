@@ -43,6 +43,10 @@ describe("formatHelperKind", () => {
     expect(formatHelperKind("helper_review")).toBe("Review Agent");
   });
 
+  it("returns 'Judge Agent' for helper_judge", () => {
+    expect(formatHelperKind("helper_judge")).toBe("Judge Agent");
+  });
+
   it("returns custom name from slugToNameMap when slug is present", () => {
     const map = new Map([["refactor", "Refactor Agent"]]);
     expect(formatHelperKind("helper_custom_refactor", map)).toBe(

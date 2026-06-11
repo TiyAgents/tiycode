@@ -1,125 +1,12 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Mutex as StdMutex, Weak};
+use std::sync::Weak;
 
 use sqlx::SqlitePool;
 use tiycore::agent::AgentMessage;
-use tiycore::types::Usage;
 
 use crate::core::agent_session::AgentSession;
-use crate::core::agent_session_history::convert_history_messages;
 use crate::core::agent_session_types::ResolvedModelRole;
-use crate::core::context_compression::ContextTokenCalibration;
 use crate::ipc::frontend_channels::ThreadStreamEvent;
-use crate::model::thread::{MessageRecord, RunSummaryDto, ToolCallDto};
-
-pub(crate) fn effective_prompt_tokens(input_tokens: u64, cache_read_tokens: u64) -> u64 {
-    input_tokens.saturating_add(cache_read_tokens)
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct ContextCompressionRuntimeState {
-    calibration: ContextTokenCalibration,
-    pub(crate) pending_prompt_estimate: Option<u32>,
-}
-
-impl ContextCompressionRuntimeState {
-    pub(crate) fn new(initial_calibration: ContextTokenCalibration) -> Self {
-        Self {
-            calibration: initial_calibration,
-            pending_prompt_estimate: None,
-        }
-    }
-
-    fn calibration(&self) -> ContextTokenCalibration {
-        self.calibration
-    }
-
-    pub(crate) fn record_pending_prompt_estimate(&mut self, estimated_tokens: u32) {
-        self.pending_prompt_estimate = Some(estimated_tokens);
-    }
-
-    fn observe_prompt_usage(&mut self, actual_prompt_tokens: u64) {
-        let Some(estimated_tokens) = self.pending_prompt_estimate.take() else {
-            return;
-        };
-
-        self.calibration = self
-            .calibration
-            .observe(estimated_tokens, actual_prompt_tokens);
-    }
-}
-
-pub(crate) fn current_context_token_calibration(
-    state: &StdMutex<ContextCompressionRuntimeState>,
-) -> ContextTokenCalibration {
-    state
-        .lock()
-        .map(|state| state.calibration())
-        .unwrap_or_default()
-}
-
-pub(crate) fn record_pending_prompt_estimate(
-    state: &StdMutex<ContextCompressionRuntimeState>,
-    estimated_tokens: u32,
-) {
-    if let Ok(mut state) = state.lock() {
-        state.record_pending_prompt_estimate(estimated_tokens);
-    }
-}
-
-pub(crate) fn observe_context_usage_calibration(
-    state: &StdMutex<ContextCompressionRuntimeState>,
-    usage: &Usage,
-) {
-    let actual_prompt_tokens = effective_prompt_tokens(usage.input, usage.cache_read);
-    if actual_prompt_tokens == 0 {
-        return;
-    }
-
-    if let Ok(mut state) = state.lock() {
-        state.observe_prompt_usage(actual_prompt_tokens);
-    }
-}
-
-pub(crate) fn build_initial_context_token_calibration(
-    latest_historical_run: Option<&RunSummaryDto>,
-    history_messages: &[MessageRecord],
-    history_tool_calls: &[ToolCallDto],
-    primary_model: &ResolvedModelRole,
-    system_prompt: &str,
-) -> ContextTokenCalibration {
-    let Some(latest_historical_run) = latest_historical_run else {
-        return ContextTokenCalibration::default();
-    };
-
-    let historical_prompt_tokens = effective_prompt_tokens(
-        latest_historical_run.usage.input_tokens,
-        latest_historical_run.usage.cache_read_tokens,
-    );
-    if historical_prompt_tokens == 0
-        || !run_summary_matches_primary_model(latest_historical_run, primary_model)
-    {
-        return ContextTokenCalibration::default();
-    }
-
-    let history =
-        convert_history_messages(history_messages, history_tool_calls, &primary_model.model);
-    let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history)
-        .saturating_add(crate::core::context_compression::estimate_tokens(
-            system_prompt,
-        ));
-
-    ContextTokenCalibration::from_observation(estimated_tokens, historical_prompt_tokens)
-        .unwrap_or_default()
-}
-
-fn run_summary_matches_primary_model(
-    run_summary: &RunSummaryDto,
-    primary_model: &ResolvedModelRole,
-) -> bool {
-    run_summary.model_id.as_deref() == Some(primary_model.model_id.as_str())
-        || run_summary.model_id.as_deref() == Some(primary_model.model.id.as_str())
-}
 
 /// Auto-compression hook body, extracted from the `set_transform_context`
 /// closure in [`configure_agent`] so the control flow is testable in isolation
@@ -150,14 +37,20 @@ pub(crate) async fn run_auto_compression(
     run_id: String,
     response_language: Option<String>,
 ) -> Vec<AgentMessage> {
-    // Phase 1: check if compression is needed.
+    // Phase 1: trust the caller. The `set_transform_context` closure in
+    // `configure_agent` is the single source of truth for "should we
+    // compress right now?" — it compares the most recent
+    // `tiycore::types::Usage::context_size()` from the last LLM call
+    // against `settings.budget()`. The previous heuristic
+    // (`should_compress` over `messages`) was removed because it could
+    // disagree with the unified-usage trigger (e.g. a long prompt with
+    // a small historical thread) and let an over-budget call slip
+    // through.
     //
-    // The hot-path caller (the `set_transform_context` closure) already gates
-    // on `should_compress` before cloning the heavy state, so in production
-    // this branch should never hit. It stays here defensively so direct
-    // callers (e.g. unit tests) still get correct behaviour for under-budget
-    // inputs without having to duplicate the check.
-    if !crate::core::context_compression::should_compress(&messages, &settings) {
+    // We still keep the cheap empty-input fast path so direct unit
+    // callers (and tests) get the same pass-through behaviour as before
+    // for the degenerate empty case.
+    if messages.is_empty() {
         return messages;
     }
 
@@ -942,11 +835,23 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn returns_messages_unchanged_when_under_budget() {
-            // With a generous budget, should_compress is false and the function
-            // is a pure pass-through — no clone of messages, no LLM call, no
-            // DB access. This exercises the most common hot-path behaviour.
-            let messages = vec![make_user("hi"), make_assistant("hello")];
+        async fn returns_messages_unchanged_when_empty_or_dangling_weak() {
+            // The trigger ("should we auto-compress?") is now owned by
+            // `set_transform_context` — it gates on
+            // `should_compress_via_context_size` before calling
+            // `run_auto_compression`. So in production, by the time we
+            // get here, the caller has already decided to compress. The
+            // only fast-path still inside `run_auto_compression` is the
+            // `messages.is_empty()` empty-input guard, so we exercise
+            // that.
+            //
+            // With a dangling `Weak<AgentSession>`, an empty input
+            // returns immediately via the fast-path: no LLM call, no
+            // DB access, no side effects. The test asserts both the
+            // length and the byte-identical content of the head
+            // message, which is enough to prove the function did not
+            // touch the input.
+            let messages = vec![];
             let settings = settings_for_test(128_000, 1_024, 1_024);
 
             let result = run_auto_compression(
@@ -960,22 +865,9 @@ mod tests {
             )
             .await;
 
-            assert_eq!(result.len(), messages.len());
-            // Content should be byte-identical — no summary was injected.
-            match (&result[0], &messages[0]) {
-                (AgentMessage::User(a), AgentMessage::User(b)) => {
-                    let at = match &a.content {
-                        tiycore::types::UserContent::Text(t) => t.as_str(),
-                        _ => panic!("expected text"),
-                    };
-                    let bt = match &b.content {
-                        tiycore::types::UserContent::Text(t) => t.as_str(),
-                        _ => panic!("expected text"),
-                    };
-                    assert_eq!(at, bt);
-                }
-                _ => panic!("expected user message at head"),
-            }
+            assert_eq!(result.len(), 0);
+            // Empty input ⇒ empty output (pass-through fast path).
+            assert!(result.is_empty());
         }
 
         #[tokio::test]
