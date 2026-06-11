@@ -321,6 +321,11 @@ pub async fn interrupt_active_runs(pool: &SqlitePool) -> Result<u64, AppError> {
         // Excludes all non-progressing statuses — see RunStatus::non_progressing_sql_in_clause()
         "UPDATE thread_runs
          SET status = 'interrupted',
+             elapsed_running_secs = elapsed_running_secs +
+                 CASE WHEN running_since IS NOT NULL
+                      THEN CAST(strftime('%s', 'now') - strftime('%s', running_since) AS INTEGER)
+                      ELSE 0 END,
+             running_since = NULL,
              error_message = COALESCE(
                  error_message,
                  'The app closed or the run was terminated before completion. Restarted in interrupted state.'
