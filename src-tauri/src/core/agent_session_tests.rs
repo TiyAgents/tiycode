@@ -1,23 +1,20 @@
 #[cfg(test)]
 pub(super) mod tests {
     use super::super::{
-        build_initial_context_token_calibration, build_profile_response_prompt_parts,
-        build_system_prompt, convert_history_messages, current_context_token_calibration,
+        build_profile_response_prompt_parts, build_system_prompt, convert_history_messages,
         handle_agent_event, main_agent_security_config, mark_runtime_queue_message_by_id,
         normalize_profile_response_language, normalize_profile_response_style,
-        plan_mode_missing_checkpoint_error, record_pending_prompt_estimate,
-        resolve_helper_model_role, resolve_helper_profile, resolve_model_plan,
-        resolve_runtime_model_role, response_style_system_instruction,
+        plan_mode_missing_checkpoint_error, resolve_helper_model_role, resolve_helper_profile,
+        resolve_model_plan, resolve_runtime_model_role, response_style_system_instruction,
         runtime_queue_message_display_content, runtime_security_config, runtime_tools_for_profile,
         runtime_tools_for_profile_with_extensions, standard_tool_timeout,
         trim_history_to_current_context, trim_runtime_queue_state,
         update_runtime_queue_state_for_event, AgentQueueMessageKind, AgentSession,
-        AgentSessionSpec, ContextCompressionRuntimeState, ProfileResponseStyle, ResolvedModelRole,
-        ResolvedRuntimeModelPlan, RuntimeModelPlan, RuntimeQueueEventAction, RuntimeQueueEventDto,
-        RuntimeQueueMessageDto, RuntimeQueueMessageStatus, RuntimeQueueState, SortKey,
-        DEFAULT_FULL_TOOL_PROFILE, MAIN_AGENT_TOOL_TIMEOUT_SECS,
-        PLAN_MODE_MISSING_CHECKPOINT_ERROR, PLAN_READ_ONLY_TOOL_PROFILE,
-        STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
+        AgentSessionSpec, ProfileResponseStyle, ResolvedModelRole, ResolvedRuntimeModelPlan,
+        RuntimeModelPlan, RuntimeQueueEventAction, RuntimeQueueEventDto, RuntimeQueueMessageDto,
+        RuntimeQueueMessageStatus, RuntimeQueueState, SortKey, DEFAULT_FULL_TOOL_PROFILE,
+        MAIN_AGENT_TOOL_TIMEOUT_SECS, PLAN_MODE_MISSING_CHECKPOINT_ERROR,
+        PLAN_READ_ONLY_TOOL_PROFILE, STANDARD_TOOL_TIMEOUT_SECS, SUBAGENT_TOOL_TIMEOUT_SECS,
     };
     use std::fs;
     use std::sync::{Arc, Mutex as StdMutex};
@@ -43,7 +40,7 @@ pub(super) mod tests {
     use crate::ipc::frontend_channels::ThreadStreamEvent;
     use crate::model::provider::{AgentProfileRecord, ProviderKind, ProviderRecord};
     use crate::model::subagent::CustomSubagentModelRole;
-    use crate::model::thread::{MessageRecord, RunSummaryDto, RunUsageDto, ToolCallDto};
+    use crate::model::thread::{MessageRecord, ToolCallDto};
     use crate::persistence::init_database;
     use crate::persistence::repo::provider_repo;
 
@@ -196,22 +193,6 @@ pub(super) mod tests {
         }
     }
 
-    fn make_history_message(id: &str, run_id: &str, role: &str, content: &str) -> MessageRecord {
-        MessageRecord {
-            id: id.to_string(),
-            thread_id: "thread-1".to_string(),
-            run_id: Some(run_id.to_string()),
-            role: role.to_string(),
-            content_markdown: content.to_string(),
-            parts_json: None,
-            message_type: "plain_message".to_string(),
-            status: "completed".to_string(),
-            metadata_json: None,
-            attachments_json: None,
-            created_at: "2026-01-01T00:00:00.000Z".to_string(),
-        }
-    }
-
     #[test]
     fn update_runtime_queue_state_for_consumed_returns_pending_messages() {
         let mut state = RuntimeQueueState::default();
@@ -322,7 +303,6 @@ pub(super) mod tests {
             history_tool_calls: Vec::new(),
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
-            initial_context_calibration: Default::default(),
             cache_arbiter: None,
         };
 
@@ -397,7 +377,6 @@ pub(super) mod tests {
             history_tool_calls: Vec::new(),
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
-            initial_context_calibration: Default::default(),
             cache_arbiter: None,
         };
         let session = AgentSession::new(
@@ -678,35 +657,6 @@ pub(super) mod tests {
         assert_eq!(state.messages[1].updated_at, now);
     }
 
-    fn make_run_summary(model_id: &str, input_tokens: u64) -> RunSummaryDto {
-        make_run_summary_with_cache(model_id, input_tokens, 0)
-    }
-
-    fn make_run_summary_with_cache(
-        model_id: &str,
-        input_tokens: u64,
-        cache_read_tokens: u64,
-    ) -> RunSummaryDto {
-        RunSummaryDto {
-            id: "run-prev".to_string(),
-            thread_id: "thread-1".to_string(),
-            run_mode: "default".to_string(),
-            status: "completed".to_string(),
-            model_id: Some(model_id.to_string()),
-            model_display_name: Some(model_id.to_string()),
-            context_window: Some(TEST_CONTEXT_WINDOW.to_string()),
-            error_message: None,
-            started_at: "2026-01-01T00:00:00.000Z".to_string(),
-            usage: RunUsageDto {
-                input_tokens,
-                output_tokens: 128,
-                cache_read_tokens,
-                cache_write_tokens: 0,
-                total_tokens: input_tokens + cache_read_tokens + 128,
-            },
-        }
-    }
-
     fn message_text(message: &AgentMessage) -> String {
         match message {
             AgentMessage::User(user) => match &user.content {
@@ -744,26 +694,29 @@ pub(super) mod tests {
         reasoning_buffer: &StdMutex<String>,
         event: &AgentEvent,
     ) {
-        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
-        handle_test_agent_event_with_context_state(
+        // The unified-trigger slot is created fresh per test; tests that
+        // care about compression-trigger state should pass their own
+        // shared mutex via `handle_test_agent_event_with_observed_usage`.
+        let last_observed_usage = StdMutex::new(None::<tiycore::types::Usage>);
+        handle_test_agent_event_with_observed_usage(
             run_id,
             event_tx,
             current_message_id,
             current_reasoning_message_id,
             last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             reasoning_buffer,
             event,
         );
     }
 
-    fn handle_test_agent_event_with_context_state(
+    fn handle_test_agent_event_with_observed_usage(
         run_id: &str,
         event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
         current_message_id: &StdMutex<Option<String>>,
         current_reasoning_message_id: &StdMutex<Option<String>>,
         last_usage: &StdMutex<Option<tiycore::types::Usage>>,
-        context_compression_state: &StdMutex<ContextCompressionRuntimeState>,
+        last_observed_usage: &StdMutex<Option<tiycore::types::Usage>>,
         reasoning_buffer: &StdMutex<String>,
         event: &AgentEvent,
     ) {
@@ -777,7 +730,7 @@ pub(super) mod tests {
             &last_completed_message_id,
             current_reasoning_message_id,
             last_usage,
-            context_compression_state,
+            last_observed_usage,
             reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1300,12 +1253,20 @@ Used for prompt assembly coverage.
     }
 
     #[test]
-    fn message_end_usage_updates_consume_pending_prompt_estimate_once() {
+    fn message_end_usage_updates_record_observed_usage_once_per_change() {
+        // Replaces the legacy `message_end_usage_updates_consume_pending_prompt_estimate_once`
+        // test. The new compression trigger (`Usage::context_size()`) does
+        // NOT depend on a pending prompt estimate — it just records the
+        // latest `Usage` into the shared `last_observed_usage` slot on
+        // every changed `MessageEnd` event. Sending the same event twice
+        // should still emit the `ThreadUsageUpdated` exactly once (the
+        // dedup happens via the `last_usage` comparison in
+        // `emit_usage_update_if_changed`).
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
-        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let last_observed_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let assistant = AssistantMessage::builder()
             .api(Api::OpenAICompletions)
@@ -1315,14 +1276,13 @@ Used for prompt assembly coverage.
             .build()
             .expect("assistant message with usage");
 
-        record_pending_prompt_estimate(&context_compression_state, 1_000);
-        handle_test_agent_event_with_context_state(
-            "run-usage-calibration",
+        handle_test_agent_event_with_observed_usage(
+            "run-usage-record",
             &event_tx,
             &current_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &AgentEvent::MessageEnd {
                 turn_index: 0,
@@ -1330,13 +1290,13 @@ Used for prompt assembly coverage.
                 message: AgentMessage::Assistant(assistant.clone()),
             },
         );
-        handle_test_agent_event_with_context_state(
-            "run-usage-calibration",
+        handle_test_agent_event_with_observed_usage(
+            "run-usage-record",
             &event_tx,
             &current_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &AgentEvent::MessageEnd {
                 turn_index: 0,
@@ -1348,25 +1308,43 @@ Used for prompt assembly coverage.
         let usage_events = std::iter::from_fn(|| event_rx.try_recv().ok())
             .filter(|event| matches!(event, ThreadStreamEvent::ThreadUsageUpdated { .. }))
             .count();
-        let calibration = current_context_token_calibration(&context_compression_state);
-
-        assert_eq!(usage_events, 1);
-        assert_eq!(calibration.ratio_basis_points(), 15_000);
-        assert!(context_compression_state
+        let observed = last_observed_usage
             .lock()
-            .expect("context compression state")
-            .pending_prompt_estimate
-            .is_none());
+            .expect("last_observed_usage mutex")
+            .clone();
+
+        // The dedup still fires: identical MessageEnd ⇒ 1 emit, even
+        // though we wrote the same Usage into the trigger slot twice.
+        assert_eq!(usage_events, 1);
+        let observed = observed.expect("observed usage should be recorded");
+        assert_eq!(observed.input, 1_500);
+        assert_eq!(observed.output, 32);
+        // The unified context_size sums input + output = 1532.
+        assert_eq!(observed.context_size(), 1_532);
     }
 
     #[test]
-    fn usage_calibration_counts_cache_read_when_input_is_zero() {
+    fn usage_record_observed_includes_cache_read_for_context_size() {
+        // Replaces the legacy `usage_calibration_counts_cache_read_when_input_is_zero`
+        // test. The new unified `Usage::context_size()` already adds
+        // `cache_read` (and `cache_write`) to the context footprint, so
+        // the trigger sees the true "tokens in the context window" figure
+        // even when the wire-level `input` is 0 — a configuration that
+        // happens e.g. on Anthropic when the entire prompt was served
+        // from the prompt cache. We assert both:
+        //
+        // 1. The `last_observed_usage` slot is populated with the full
+        //    `Usage` (including cache_read), so the next
+        //    `set_transform_context` call can compare the unified
+        //    `context_size()` against the budget.
+        // 2. `Usage::context_size()` adds `cache_read` to the total —
+        //    input=0, output=32, cache_read=1500 ⇒ context_size=1532.
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let current_message_id = StdMutex::new(None::<String>);
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
-        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let last_observed_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
         let last_text_delta = StdMutex::new(None::<String>);
@@ -1385,15 +1363,14 @@ Used for prompt assembly coverage.
             .build()
             .expect("assistant message with cache-read usage");
 
-        record_pending_prompt_estimate(&context_compression_state, 1_000);
         handle_agent_event(
-            "run-cache-read-calibration",
+            "run-cache-read-record",
             &event_tx,
             &current_message_id,
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1409,100 +1386,18 @@ Used for prompt assembly coverage.
         let usage_events = std::iter::from_fn(|| event_rx.try_recv().ok())
             .filter(|event| matches!(event, ThreadStreamEvent::ThreadUsageUpdated { .. }))
             .count();
-        let calibration = current_context_token_calibration(&context_compression_state);
+        let observed = last_observed_usage
+            .lock()
+            .expect("last_observed_usage mutex")
+            .clone();
 
         assert_eq!(usage_events, 1);
-        assert_eq!(calibration.ratio_basis_points(), 15_000);
-        assert!(context_compression_state
-            .lock()
-            .expect("context compression state")
-            .pending_prompt_estimate
-            .is_none());
-    }
-
-    #[test]
-    fn build_initial_context_token_calibration_seeds_from_matching_historical_run() {
-        let primary_model = sample_resolved_model_role("primary-model");
-        let history_messages = vec![
-            make_history_message("msg-1", "run-prev", "user", &"x".repeat(600)),
-            make_history_message("msg-2", "run-prev", "assistant", &"y".repeat(600)),
-        ];
-        let history = convert_history_messages(&history_messages, &[], &primary_model.model);
-        let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history);
-        let run_summary = make_run_summary("primary-model", (estimated_tokens as u64) * 2);
-
-        let calibration = build_initial_context_token_calibration(
-            Some(&run_summary),
-            &history_messages,
-            &[],
-            &primary_model,
-            "",
-        );
-
-        assert_eq!(calibration.ratio_basis_points(), 20_000);
-        assert_eq!(
-            calibration.apply_to_estimate(estimated_tokens),
-            estimated_tokens * 2
-        );
-    }
-
-    #[test]
-    fn build_initial_context_token_calibration_counts_cache_read_tokens() {
-        let primary_model = sample_resolved_model_role("primary-model");
-        let history_messages = vec![
-            make_history_message("msg-1", "run-prev", "user", &"x".repeat(600)),
-            make_history_message("msg-2", "run-prev", "assistant", &"y".repeat(600)),
-        ];
-        let history = convert_history_messages(&history_messages, &[], &primary_model.model);
-        let estimated_tokens = crate::core::context_compression::estimate_total_tokens(&history);
-        let run_summary = make_run_summary_with_cache(
-            "primary-model",
-            estimated_tokens as u64 / 2,
-            estimated_tokens as u64 * 3 / 2,
-        );
-
-        let calibration = build_initial_context_token_calibration(
-            Some(&run_summary),
-            &history_messages,
-            &[],
-            &primary_model,
-            "",
-        );
-
-        assert_eq!(calibration.ratio_basis_points(), 20_000);
-        assert_eq!(
-            calibration.apply_to_estimate(estimated_tokens),
-            estimated_tokens * 2
-        );
-    }
-
-    #[test]
-    fn build_initial_context_token_calibration_ignores_mismatched_models_and_zero_usage() {
-        let primary_model = sample_resolved_model_role("primary-model");
-        let history_messages = vec![make_history_message(
-            "msg-1",
-            "run-prev",
-            "user",
-            &"x".repeat(400),
-        )];
-
-        let mismatched = build_initial_context_token_calibration(
-            Some(&make_run_summary("other-model", 4_096)),
-            &history_messages,
-            &[],
-            &primary_model,
-            "",
-        );
-        let zero_usage = build_initial_context_token_calibration(
-            Some(&make_run_summary("primary-model", 0)),
-            &history_messages,
-            &[],
-            &primary_model,
-            "",
-        );
-
-        assert_eq!(mismatched.ratio_basis_points(), 10_000);
-        assert_eq!(zero_usage.ratio_basis_points(), 10_000);
+        let observed = observed.expect("observed usage should be recorded");
+        assert_eq!(observed.input, 0);
+        assert_eq!(observed.output, 32);
+        assert_eq!(observed.cache_read, 1_500);
+        // Unified context_size adds cache_read even when input is 0.
+        assert_eq!(observed.context_size(), 1_532);
     }
 
     #[test]
@@ -1512,7 +1407,7 @@ Used for prompt assembly coverage.
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
-        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let last_observed_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
         let last_text_delta = StdMutex::new(None::<String>);
@@ -1524,7 +1419,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1558,7 +1453,7 @@ Used for prompt assembly coverage.
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
-        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let last_observed_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
         let last_text_delta = StdMutex::new(None::<String>);
@@ -1570,7 +1465,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1617,7 +1512,7 @@ Used for prompt assembly coverage.
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
-        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let last_observed_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
         let last_text_delta = StdMutex::new(None::<String>);
@@ -1640,7 +1535,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1657,7 +1552,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1674,7 +1569,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1706,7 +1601,7 @@ Used for prompt assembly coverage.
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
-        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let last_observed_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
         let last_text_delta = StdMutex::new(None::<String>);
@@ -1719,7 +1614,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1750,7 +1645,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1814,7 +1709,7 @@ Used for prompt assembly coverage.
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
-        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let last_observed_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
         let last_text_delta = StdMutex::new(None::<String>);
@@ -1829,7 +1724,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1861,7 +1756,7 @@ Used for prompt assembly coverage.
         let last_completed_message_id = StdMutex::new(None::<String>);
         let current_reasoning_message_id = StdMutex::new(None::<String>);
         let last_usage = StdMutex::new(None::<tiycore::types::Usage>);
-        let context_compression_state = StdMutex::new(ContextCompressionRuntimeState::default());
+        let last_observed_usage = StdMutex::new(None::<tiycore::types::Usage>);
         let reasoning_buffer = StdMutex::new(String::new());
         let current_turn_index = StdMutex::new(None::<usize>);
         let last_text_delta = StdMutex::new(None::<String>);
@@ -1884,7 +1779,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -1903,7 +1798,7 @@ Used for prompt assembly coverage.
             &last_completed_message_id,
             &current_reasoning_message_id,
             &last_usage,
-            &context_compression_state,
+            &last_observed_usage,
             &reasoning_buffer,
             &current_turn_index,
             &last_text_delta,
@@ -4904,7 +4799,6 @@ Used for prompt assembly coverage.
             history_tool_calls: Vec::new(),
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
-            initial_context_calibration: Default::default(),
             cache_arbiter: None,
         };
         let session = AgentSession::new(
@@ -4979,7 +4873,6 @@ Used for prompt assembly coverage.
             history_tool_calls: Vec::new(),
             model_plan: sample_resolved_runtime_model_plan(None),
             initial_prompt: None,
-            initial_context_calibration: Default::default(),
             cache_arbiter: None,
         };
         let session = AgentSession::new(

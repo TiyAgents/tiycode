@@ -517,12 +517,27 @@ export function mapRunSummaryToContextUsage(run: RunSummaryDto | null) {
     return null;
   }
 
+  // Prefer the cross-protocol unified `contextSize` from tiycore
+  // 0.2.10-rc.2 (set in the Rust DTO via `Usage::context_size()` =
+  // input + output + cache_read + cache_write). Fall back to that sum
+  // when the field is missing — e.g. older persisted snapshots
+  // written before the upgrade.
+  const explicitContextSize = run.usage.contextSize ?? 0;
+  const contextSize =
+    explicitContextSize > 0
+      ? explicitContextSize
+      : run.usage.inputTokens +
+        run.usage.outputTokens +
+        run.usage.cacheReadTokens +
+        run.usage.cacheWriteTokens;
+
   return {
     contextWindow: run.contextWindow,
     inputTokens: run.usage.inputTokens,
     outputTokens: run.usage.outputTokens,
     cacheReadTokens: run.usage.cacheReadTokens,
     cacheWriteTokens: run.usage.cacheWriteTokens,
+    contextSize,
     totalTokens: run.usage.totalTokens,
     modelDisplayName: run.modelDisplayName,
     runId: run.id,

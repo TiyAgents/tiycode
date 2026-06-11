@@ -178,38 +178,39 @@ function readActivity(
 
 function readUsage(event: RawThreadStreamEvent): RunUsageDto {
   const value = readValue(event, "usage", "usage") as Record<string, unknown> | null | undefined;
+  const inputTokens = readUsageField(value, "inputTokens", "input_tokens");
+  const outputTokens = readUsageField(value, "outputTokens", "output_tokens");
+  const cacheReadTokens = readUsageField(value, "cacheReadTokens", "cache_read_tokens");
+  const cacheWriteTokens = readUsageField(value, "cacheWriteTokens", "cache_write_tokens");
+  const totalTokens = readUsageField(value, "totalTokens", "total_tokens");
+  // Prefer the unified `context_size` field sent by tiycore >= 0.2.10-rc.2
+  // (it sums input + output + cache_read + cache_write consistently across
+  // OpenAI / Anthropic / Google). Fall back to that sum when the field is
+  // missing — e.g. older persisted snapshots or partial hand-crafted events.
+  const explicitContextSize = readUsageField(value, "contextSize", "context_size");
+  const contextSize =
+    explicitContextSize > 0
+      ? explicitContextSize
+      : inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
   return {
-    inputTokens:
-      typeof value?.inputTokens === "number"
-        ? value.inputTokens
-        : typeof value?.input_tokens === "number"
-          ? value.input_tokens
-          : 0,
-    outputTokens:
-      typeof value?.outputTokens === "number"
-        ? value.outputTokens
-        : typeof value?.output_tokens === "number"
-          ? value.output_tokens
-          : 0,
-    cacheReadTokens:
-      typeof value?.cacheReadTokens === "number"
-        ? value.cacheReadTokens
-        : typeof value?.cache_read_tokens === "number"
-          ? value.cache_read_tokens
-          : 0,
-    cacheWriteTokens:
-      typeof value?.cacheWriteTokens === "number"
-        ? value.cacheWriteTokens
-        : typeof value?.cache_write_tokens === "number"
-          ? value.cache_write_tokens
-          : 0,
-    totalTokens:
-      typeof value?.totalTokens === "number"
-        ? value.totalTokens
-        : typeof value?.total_tokens === "number"
-          ? value.total_tokens
-          : 0,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens,
+    contextSize,
   };
+}
+
+function readUsageField(
+  value: Record<string, unknown> | null | undefined,
+  camelKey: string,
+  snakeKey: string,
+): number {
+  if (!value) return 0;
+  if (typeof value[camelKey] === "number") return value[camelKey];
+  if (typeof value[snakeKey] === "number") return value[snakeKey];
+  return 0;
 }
 
 function readRuntimeQueueSnapshot(value: unknown): RuntimeQueueSnapshotDto {

@@ -46,6 +46,15 @@ impl RunHelperRow {
                 cache_read_tokens: self.cache_read_tokens.max(0) as u64,
                 cache_write_tokens: self.cache_write_tokens.max(0) as u64,
                 total_tokens: self.total_tokens.max(0) as u64,
+                // Reconstruct the cross-protocol unified context size
+                // from the persisted per-bucket fields. The DB schema
+                // doesn't store `context_size` (it would duplicate the
+                // four per-bucket fields); we derive it on read.
+                context_size: (self.input_tokens
+                    + self.output_tokens
+                    + self.cache_read_tokens
+                    + self.cache_write_tokens)
+                    .max(0) as u64,
             },
         }
     }

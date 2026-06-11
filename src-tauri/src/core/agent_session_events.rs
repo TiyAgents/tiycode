@@ -4,9 +4,6 @@ use tiycore::agent::AgentMessage;
 use tiycore::types::{AssistantMessageEvent, Usage};
 use tokio::sync::mpsc;
 
-use crate::core::agent_session_compression::{
-    observe_context_usage_calibration, ContextCompressionRuntimeState,
-};
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::thread::RunUsageDto;
 
@@ -17,7 +14,7 @@ pub(crate) fn handle_agent_event(
     last_completed_message_id: &StdMutex<Option<String>>,
     current_reasoning_message_id: &StdMutex<Option<String>>,
     last_usage: &StdMutex<Option<Usage>>,
-    context_compression_state: &StdMutex<ContextCompressionRuntimeState>,
+    last_observed_usage: &StdMutex<Option<Usage>>,
     reasoning_buffer: &StdMutex<String>,
     current_turn_index: &StdMutex<Option<usize>>,
     last_text_delta: &StdMutex<Option<String>>,
@@ -177,7 +174,7 @@ pub(crate) fn handle_agent_event(
                     run_id,
                     event_tx,
                     last_usage,
-                    context_compression_state,
+                    last_observed_usage,
                     &partial.usage,
                     context_window,
                     model_display_name,
@@ -208,7 +205,7 @@ pub(crate) fn handle_agent_event(
                         run_id,
                         event_tx,
                         last_usage,
-                        context_compression_state,
+                        last_observed_usage,
                         &assistant.usage,
                         context_window,
                         model_display_name,
@@ -223,7 +220,7 @@ pub(crate) fn handle_agent_event(
                     run_id,
                     event_tx,
                     last_usage,
-                    context_compression_state,
+                    last_observed_usage,
                     &assistant.usage,
                     context_window,
                     model_display_name,
@@ -259,7 +256,7 @@ fn emit_usage_update_if_changed(
     run_id: &str,
     event_tx: &mpsc::UnboundedSender<ThreadStreamEvent>,
     last_usage: &StdMutex<Option<Usage>>,
-    context_compression_state: &StdMutex<ContextCompressionRuntimeState>,
+    last_observed_usage: &StdMutex<Option<Usage>>,
     usage: &Usage,
     context_window: &str,
     model_display_name: &str,
@@ -287,7 +284,12 @@ fn emit_usage_update_if_changed(
         return;
     }
 
-    observe_context_usage_calibration(context_compression_state, usage);
+    // Record the freshly-observed usage into the shared
+    // `last_observed_usage` slot. The `set_transform_context` closure
+    // (configured by `configure_agent`) reads this same slot to decide
+    // whether the next turn needs auto-compression — see
+    // `should_compress_via_context_size` in `context_compression`.
+    record_observed_usage(last_observed_usage, usage);
 
     let _ = event_tx.send(ThreadStreamEvent::ThreadUsageUpdated {
         run_id: run_id.to_string(),
@@ -295,6 +297,22 @@ fn emit_usage_update_if_changed(
         context_window: Some(context_window.to_string()),
         usage: RunUsageDto::from(*usage),
     });
+}
+
+/// Record the most recent `tiycore::types::Usage` into the shared
+/// compression-trigger slot.
+///
+/// The slot is shared with `set_transform_context`: the closure reads it
+/// to compare the latest unified `context_size()` against the configured
+/// `CompressionSettings::budget()`. Writes are guarded by the standard
+/// `lock_or_recover` poison-recovery helper so a panic in any consumer
+/// cannot corrupt the trigger state.
+fn record_observed_usage(last_observed_usage: &StdMutex<Option<Usage>>, usage: &Usage) {
+    if let Ok(mut guard) = last_observed_usage.lock() {
+        *guard = Some(*usage);
+    } else {
+        tracing::warn!("record_observed_usage: mutex poisoned, recovering");
+    }
 }
 
 /// Helper to recover a poisoned `StdMutex`. All mutex helpers below use this

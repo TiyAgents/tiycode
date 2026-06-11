@@ -20,6 +20,14 @@ export type ThreadContextUsage = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /**
+   * Cross-protocol unified context occupancy
+   * (`input + output + cache_read + cache_write`). The badge uses this for
+   * percentage and "exceeded" detection. `totalTokens` is retained for
+   * wire-level reporting but is no longer used as the "used" figure.
+   */
+  contextSize: number;
+  /** Wire-level total reported by the provider. Preserved for parity with the backend DTO. */
   totalTokens: number;
   modelDisplayName: string | null;
   runId: string;

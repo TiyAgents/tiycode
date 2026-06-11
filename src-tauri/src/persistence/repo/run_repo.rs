@@ -364,6 +364,17 @@ fn map_run_summary(row: RunRow) -> RunSummaryDto {
             cache_read_tokens: row.cache_read_tokens.max(0) as u64,
             cache_write_tokens: row.cache_write_tokens.max(0) as u64,
             total_tokens: row.total_tokens.max(0) as u64,
+            // Derive the cross-protocol unified context size on read —
+            // see the doc-comment in the `RunUsageDto` declaration.
+            // The DB schema stores the four per-bucket token columns;
+            // `context_size` is a derived projection that we re-emit
+            // on every read so the frontend always has a unified
+            // "context occupancy" figure to display.
+            context_size: (row.input_tokens
+                + row.output_tokens
+                + row.cache_read_tokens
+                + row.cache_write_tokens)
+                .max(0) as u64,
         },
     }
 }

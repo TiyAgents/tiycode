@@ -253,14 +253,27 @@ pub fn estimate_total_tokens(messages: &[AgentMessage]) -> u32 {
     messages.iter().map(estimate_message_tokens).sum()
 }
 
-/// Apply an optional conservative calibration to a heuristic token estimate.
-pub(crate) fn calibrate_total_tokens(
-    total_tokens: u32,
-    calibration: Option<ContextTokenCalibration>,
-) -> u32 {
-    calibration
-        .unwrap_or_default()
-        .apply_to_estimate(total_tokens)
+/// Trigger compression when the most recently observed unified context
+/// occupancy (`tiycore::types::Usage::context_size()`) is over budget.
+///
+/// This is the canonical "should we auto-compress right now?" predicate
+/// used by the `set_transform_context` hook in `agent_session`. It takes
+/// the last observed usage (the `Some(usage)` branch) and the configured
+/// `CompressionSettings`, returning `true` iff the **cross-protocol
+/// unified** context size exceeds `context_window - reserve_tokens`.
+///
+/// The first time we see a thread we have no observed usage yet; the
+/// closure passes `None` to defer the decision until the first LLM
+/// response reports its `context_size`. In that case the function
+/// returns `false` — never trigger on a missing observation.
+pub fn should_compress_via_context_size(
+    last_usage: Option<&tiycore::types::Usage>,
+    settings: &CompressionSettings,
+) -> bool {
+    match last_usage {
+        Some(usage) => usage.context_size() > u64::from(settings.budget()),
+        None => false,
+    }
 }
 
 /// Check whether a token total exceeds the compression input budget.
@@ -271,25 +284,20 @@ pub(crate) fn should_compress_total_tokens(
     total_tokens > settings.budget()
 }
 
-/// Check whether compression is needed for the given messages and settings,
-/// applying an optional conservative calibration derived from real provider
-/// `usage.input` samples.
-pub fn should_compress_with_calibration(
-    messages: &[AgentMessage],
-    settings: &CompressionSettings,
-    calibration: Option<ContextTokenCalibration>,
-) -> bool {
+/// Check whether compression is needed for the given messages and settings.
+///
+/// This is a heuristic estimator kept for direct callers (e.g. fallback
+/// paths, debug tooling) and for the `compress_context_fallback` safety
+/// net. The hot path in `set_transform_context` deliberately does **not**
+/// use this — it uses [`should_compress_via_context_size`] so the trigger
+/// reflects real provider-reported context occupancy
+/// (`Usage::context_size()`) rather than a chars/4 estimate.
+pub fn should_compress(messages: &[AgentMessage], settings: &CompressionSettings) -> bool {
     if messages.is_empty() {
         return false;
     }
     let total_tokens = estimate_total_tokens(messages);
-    let calibrated_total_tokens = calibrate_total_tokens(total_tokens, calibration);
-    should_compress_total_tokens(calibrated_total_tokens, settings)
-}
-
-/// Check whether compression is needed for the given messages and settings.
-pub fn should_compress(messages: &[AgentMessage], settings: &CompressionSettings) -> bool {
-    should_compress_with_calibration(messages, settings, None)
+    should_compress_total_tokens(total_tokens, settings)
 }
 
 /// Find the cut-point index: messages before this index are "old" (to be
@@ -904,33 +912,89 @@ mod tests {
     }
 
     #[test]
-    fn should_compress_with_calibration_triggers_when_raw_estimate_is_under_budget() {
-        let mut messages = Vec::new();
-        for i in 0..4 {
-            messages.push(make_user(&format!("Question {}: {}", i, "x".repeat(400))));
-            messages.push(make_assistant(&format!(
-                "Answer {}: {}",
-                i,
-                "y".repeat(400)
-            )));
-        }
+    fn should_compress_via_context_size_triggers_when_last_usage_exceeds_budget() {
+        // The unified `context_size` (= input + output + cache_read +
+        // cache_write) is the canonical "context occupancy" source of
+        // truth from tiycore 0.2.10-rc.2. When the most recent LLM call
+        // reports a `context_size` over `context_window - reserve_tokens`,
+        // compression must trigger on the NEXT `set_transform_context`
+        // invocation.
+        let settings = CompressionSettings {
+            context_window: 4_000,
+            reserve_tokens: 2_000,
+            // budget = 2_000
+            keep_recent_tokens: 500,
+        };
+        // 2_500 > 2_000 → trigger.
+        let over_budget = tiycore::types::Usage {
+            input: 2_000,
+            output: 500,
+            cache_read: 0,
+            cache_write: 0,
+            total_tokens: 2_500,
+            cost: tiycore::types::UsageCost::default(),
+        };
+        assert!(should_compress_via_context_size(
+            Some(&over_budget),
+            &settings,
+        ));
 
+        // 1_500 ≤ 2_000 → pass-through.
+        let under_budget = tiycore::types::Usage {
+            input: 1_000,
+            output: 500,
+            cache_read: 0,
+            cache_write: 0,
+            total_tokens: 1_500,
+            cost: tiycore::types::UsageCost::default(),
+        };
+        assert!(!should_compress_via_context_size(
+            Some(&under_budget),
+            &settings,
+        ));
+
+        // First request: no observed usage yet → pass-through.
+        assert!(!should_compress_via_context_size(None, &settings));
+    }
+
+    #[test]
+    fn should_compress_via_context_size_uses_cache_read_and_cache_write() {
+        // The unified context size includes cache_read and cache_write
+        // because those tokens still occupy the provider's context window.
+        // A wire-level `total_tokens` may exclude them on some providers
+        // (e.g. Anthropic) but the unified figure must add them back.
         let settings = CompressionSettings {
             context_window: 4_000,
             reserve_tokens: 2_000,
             keep_recent_tokens: 500,
         };
-        let raw_total = estimate_total_tokens(&messages);
-        assert!(raw_total < settings.budget());
-
-        let calibration = ContextTokenCalibration::from_observation(raw_total, 2_500)
-            .expect("non-zero observation should produce calibration");
-
-        assert!(!should_compress(&messages, &settings));
-        assert!(should_compress_with_calibration(
-            &messages,
-            &settings,
-            Some(calibration),
+        let usage = tiycore::types::Usage {
+            input: 800,
+            output: 200,
+            cache_read: 800,
+            cache_write: 200,
+            // Wire-level: input + output = 1000. With cache: 2000.
+            // The Anthropic wire-level total_tokens is sometimes reported
+            // as `input + output + cache_read + cache_write` already
+            // (= 2000 here), but the unified figure is always computed
+            // by the sum so it doesn't depend on the provider.
+            total_tokens: 1_000,
+            cost: tiycore::types::UsageCost::default(),
+        };
+        // context_size = 800 + 200 + 800 + 200 = 2000 = budget → NOT over.
+        assert!(!should_compress_via_context_size(Some(&usage), &settings));
+        // Just-above: 2001 > 2000.
+        let just_above = tiycore::types::Usage {
+            input: 801,
+            output: 200,
+            cache_read: 800,
+            cache_write: 200,
+            total_tokens: 1_001,
+            cost: tiycore::types::UsageCost::default(),
+        };
+        assert!(should_compress_via_context_size(
+            Some(&just_above),
+            &settings
         ));
     }
 

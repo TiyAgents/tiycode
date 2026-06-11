@@ -40,6 +40,9 @@ const usage = {
   cacheReadTokens: 3,
   cacheWriteTokens: 4,
   totalTokens: 10,
+  // Cross-protocol unified context occupancy from tiycore 0.2.10-rc.2:
+  // input + output + cache_read + cache_write = 1 + 2 + 3 + 4 = 10.
+  contextSize: 10,
 };
 
 const helperSnapshot = {

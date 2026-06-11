@@ -382,7 +382,20 @@ export interface RunUsageDto {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /**
+   * Wire-level total reported by the provider. This is **per-response** and
+   * is NOT a reliable "context occupancy" value (different providers sum
+   * different buckets). Prefer {@link contextSize} for any "context used"
+   * display or trigger logic.
+   */
   totalTokens: number;
+  /**
+   * Cross-protocol unified context occupancy, derived from
+   * `tiycore::types::Usage::context_size()` =
+   * `input + output + cache_read + cache_write`. Use this for the context
+   * badge, percentage calculations, and compression triggers.
+   */
+  contextSize: number;
 }
 
 export interface ToolCallDto {
