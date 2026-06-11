@@ -1021,17 +1021,17 @@ impl AgentSession {
         // meets the quality contract enforced by the system prompt.
         if artifact.title == "Implementation Plan" {
             return agent_error_result(
-                "update_plan requires a non-empty title that describes the change (not the default placeholder).",
+                "update_plan failed: missing a real \"title\". Pass all required fields as non-empty top-level arguments: title, summary, context, design, keyImplementation, steps, verification, risks. Minimal example: {\"title\": \"Add X to Y\", \"summary\": \"...\", \"context\": \"...\", \"design\": \"...\", \"keyImplementation\": \"...\", \"steps\": [\"...\"], \"verification\": \"...\", \"risks\": [\"...\"]}.",
             );
         }
         if artifact.context.trim().is_empty() {
             return agent_error_result(
-                "update_plan requires a non-empty context section. Describe the current state of the relevant code with inspected file paths and confirmed facts.",
+                "update_plan failed: \"context\" is empty. Provide a non-empty top-level \"context\" string describing the current state of the relevant code with inspected file paths and confirmed facts.",
             );
         }
         if artifact.design.trim().is_empty() {
             return agent_error_result(
-                "update_plan requires a non-empty design section. Explain the recommended approach, architecture changes, data flow, and tradeoffs.",
+                "update_plan failed: \"design\" is empty. Provide a non-empty top-level \"design\" string explaining the recommended approach, architecture changes, data flow, and tradeoffs.",
             );
         }
 
