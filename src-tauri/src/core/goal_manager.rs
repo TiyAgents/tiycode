@@ -255,34 +255,6 @@ impl GoalManager {
         goal_repo::account_usage(&self.pool, goal_id, tokens, 1).await
     }
 
-    // ── Auto-resume ──
-
-    /// Check if a paused goal should auto-resume when the user sends a new message.
-    /// Returns Some(()) if the goal was auto-resumed, None if it shouldn't.
-    pub async fn try_auto_resume(&self) -> Result<bool, AppError> {
-        let goal = match self.get_active().await? {
-            Some(g) => g,
-            None => return Ok(false),
-        };
-
-        if goal.status != GoalStatus::Paused {
-            return Ok(false);
-        }
-
-        let should_resume = goal
-            .pause_reason
-            .as_ref()
-            .map(|r| r.auto_resume_on_user_message())
-            .unwrap_or(false);
-
-        if should_resume {
-            goal_repo::update_status(&self.pool, &goal.id, GoalStatus::Active, None, None, None)
-                .await?;
-        }
-
-        Ok(should_resume)
-    }
-
     // ── Evaluation ──
 
     /// Evaluate whether the goal should continue, pause, or complete after a turn.
@@ -307,27 +279,12 @@ impl GoalManager {
                 return verdict;
             }
 
-            // Completion claim without tool call
+            // Completion claim without tool call — keep nudging agent toward
+            // Judge verification; no DB status change. The counter is still
+            // cleared on tool activity / resume / clear, but reaching 3 no
+            // longer auto-pauses (status transitions are reserved for user
+            // commands and Judge verdicts).
             if self.detect_completion_claim(response) {
-                let should_pause = {
-                    let mut guard = self.lock_runtime();
-                    let count = guard
-                        .completion_claim_count
-                        .entry(self.thread_id.clone())
-                        .or_default();
-                    *count += 1;
-                    *count >= 3
-                };
-                if should_pause {
-                    // Reset counter before pausing
-                    self.lock_runtime()
-                        .completion_claim_count
-                        .remove(&self.thread_id);
-                    return GoalVerdict::Paused {
-                        reason: PauseReason::IdleBlocked,
-                        detail: Some("agent repeatedly claimed completion without requesting Judge verification via agent_judge".into()),
-                    };
-                }
                 return GoalVerdict::ChallengeEvidence;
             }
 
@@ -342,13 +299,12 @@ impl GoalManager {
         // Reset idle counters since tools were called
         self.reset_idle_counters();
 
-        // ── Layer 4: Budget checks ──
-        if let Some(budget) = goal.token_budget {
-            if goal.tokens_used >= budget {
-                return GoalVerdict::BudgetLimited;
-            }
-        }
-
+        // ── Layer 4: Turn budget + token budget checks ──
+        // `turns_used >= max_turns` auto-pauses (explicitly approved path).
+        // `tokens_used >= token_budget` is reported via the `budget_limited`
+        // verdict string (no DB status change) so the run loop can stop
+        // continuation. Status transitions are reserved for explicit user
+        // commands and Judge verdicts.
         if goal.turns_used >= goal.max_turns {
             return GoalVerdict::Paused {
                 reason: PauseReason::BudgetExhausted,
@@ -357,6 +313,12 @@ impl GoalManager {
                     goal.turns_used, goal.max_turns
                 )),
             };
+        }
+
+        if let Some(budget) = goal.token_budget {
+            if goal.tokens_used >= budget {
+                return GoalVerdict::BudgetLimited;
+            }
         }
 
         // ── Default: continue ──
@@ -370,35 +332,23 @@ impl GoalManager {
         tool_calls: &[String],
         _response: &str,
     ) -> Option<GoalVerdict> {
-        for tool_name in tool_calls {
-            match tool_name.as_str() {
-                "clarify" => {
-                    return Some(GoalVerdict::Paused {
-                        reason: PauseReason::ClarifyPending,
-                        detail: Some("agent requested clarification".into()),
-                    });
-                }
-                "update_plan" => {
-                    return Some(GoalVerdict::Paused {
-                        reason: PauseReason::PlanPending,
-                        detail: Some("agent published a plan, awaiting approval".into()),
-                    });
-                }
-                // agent_judge is the main-agent-only acceptance request. It is
-                // handled by the tool execution pipeline (execute_judge_tool),
-                // which runs the Judge and records the verdict. Evaluation must
-                // not treat it as a blocking tool — like any tool call it shows
-                // the agent acted and should reset idle tendencies.
-                _ => {}
-            }
-        }
+        // Tool-based auto-pausing has been removed: status transitions are
+        // reserved for explicit user commands and Judge verdicts. `clarify`
+        // and `update_plan` no longer flip the goal to paused; they fall
+        // through to the continuation path. `agent_judge` is the main-agent
+        // acceptance request and is handled by the tool execution pipeline
+        // (execute_judge_tool), which runs the Judge and records the
+        // verdict — it is never a blocking tool here.
+        let _ = tool_calls;
         None
     }
 
     fn detect_idle_block(&self, response: &str) -> Option<GoalVerdict> {
         let idle_count = self.increment_idle_count();
-        let trimmed = response.trim().to_lowercase();
-
+        // Heuristic question detection has been removed; status transitions
+        // are reserved for explicit user commands and Judge verdicts, so idle
+        // detection is purely a turn-count trigger. `response` is unused.
+        let _ = response;
         if idle_count >= MAX_IDLE_TURNS {
             return Some(GoalVerdict::Paused {
                 reason: PauseReason::IdleBlocked,
@@ -406,31 +356,6 @@ impl GoalManager {
                     "agent has not performed any tool calls for {idle_count} consecutive turns"
                 )),
             });
-        }
-
-        // Lightweight heuristic: short question-like response + no tools
-        if idle_count >= 2 {
-            let blockers = [
-                "should i",
-                "do you want",
-                "would you like",
-                "请确认",
-                "需要你决定",
-                "which approach",
-                "which option",
-                "can you confirm",
-                "let me know if",
-                "before i proceed",
-                "你的选择是",
-                "你确认吗",
-                "需要你同意",
-            ];
-            if trimmed.len() < 500 && blockers.iter().any(|b| trimmed.contains(b)) {
-                return Some(GoalVerdict::Paused {
-                    reason: PauseReason::IdleBlocked,
-                    detail: Some("agent appears blocked, may need user input".into()),
-                });
-            }
         }
         None
     }
@@ -599,7 +524,15 @@ impl GoalManager {
                     .await?;
             }
             GoalVerdict::BudgetLimited => {
-                self.mark_budget_limited(&current.id).await?;
+                // Advisory: token budget exhausted — do NOT write to DB.
+                // The verdict string still propagates as "budget_limited" so
+                // the run loop can stop continuation. Goal status remains
+                // `active` and is only changed by explicit user commands
+                // (`/goal budget-limit`) or Judge verdicts.
+                tracing::info!(
+                    goal_id = %current.id,
+                    "token budget exhausted: emitting budget_limited verdict without DB status change"
+                );
             }
         }
 

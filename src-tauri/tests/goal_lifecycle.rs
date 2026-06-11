@@ -165,7 +165,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluate_after_turn_clarify_triggers_pause() {
+    async fn evaluate_after_turn_clarify_no_longer_pauses() {
+        // Tool-based auto-pausing has been removed: `clarify` no longer
+        // returns a `Paused(ClarifyPending)` verdict. Status transitions are
+        // reserved for explicit user commands and Judge verdicts, so the
+        // evaluate path falls through to `Continue`.
         let pool = setup_pool().await;
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
@@ -174,17 +178,22 @@ mod tests {
         mgr.record_tool_call("clarify");
 
         let verdict = mgr.evaluate_after_turn("What do you think?", &goal);
-        assert!(matches!(
-            verdict,
-            GoalVerdict::Paused {
-                reason: PauseReason::ClarifyPending,
-                ..
-            }
-        ));
+        assert!(
+            matches!(verdict, GoalVerdict::Continue),
+            "clarify should no longer pause the goal; got {verdict:?}"
+        );
+
+        // DB status must remain active — no pause was written.
+        let active = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(active.status, GoalStatus::Active);
+        assert!(active.pause_reason.is_none());
     }
 
     #[tokio::test]
-    async fn evaluate_after_turn_update_plan_triggers_pause() {
+    async fn evaluate_after_turn_update_plan_no_longer_pauses() {
+        // Tool-based auto-pausing has been removed: `update_plan` no longer
+        // returns a `Paused(PlanPending)` verdict. The plan tool's approval
+        // flow is handled outside the goal manager now.
         let pool = setup_pool().await;
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
@@ -192,13 +201,14 @@ mod tests {
         mgr.record_tool_call("update_plan");
 
         let verdict = mgr.evaluate_after_turn("Here is the plan", &goal);
-        assert!(matches!(
-            verdict,
-            GoalVerdict::Paused {
-                reason: PauseReason::PlanPending,
-                ..
-            }
-        ));
+        assert!(
+            matches!(verdict, GoalVerdict::Continue),
+            "update_plan should no longer pause the goal; got {verdict:?}"
+        );
+
+        let active = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(active.status, GoalStatus::Active);
+        assert!(active.pause_reason.is_none());
     }
 
     #[tokio::test]
@@ -283,6 +293,9 @@ mod tests {
 
     #[tokio::test]
     async fn auto_resume_clarify_pending() {
+        // Auto-resume on user message has been removed. A paused goal — even
+        // one paused for a `ClarifyPending` reason — must stay paused until
+        // an explicit `resume()` is issued.
         let pool = setup_pool().await;
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
@@ -291,15 +304,21 @@ mod tests {
             .await
             .unwrap();
 
-        let resumed = mgr.try_auto_resume().await.unwrap();
-        assert!(resumed, "ClarifyPending should auto-resume");
+        // No auto-resume path exists; status stays paused.
+        let paused = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(paused.status, GoalStatus::Paused);
 
+        // Explicit resume still works.
+        mgr.resume(&goal.id).await.unwrap();
         let active = mgr.get_active().await.unwrap().unwrap();
         assert_eq!(active.status, GoalStatus::Active);
     }
 
     #[tokio::test]
     async fn auto_resume_skips_user_requested() {
+        // Auto-resume on user message has been removed. A `UserRequested`
+        // pause is therefore equivalent to every other pause from the
+        // auto-resume perspective: only explicit `resume()` will reopen it.
         let pool = setup_pool().await;
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
         let goal = mgr.create_goal("Test goal", None).await.unwrap();
@@ -307,9 +326,6 @@ mod tests {
         mgr.pause(&goal.id, PauseReason::UserRequested, None)
             .await
             .unwrap();
-
-        let resumed = mgr.try_auto_resume().await.unwrap();
-        assert!(!resumed, "UserRequested should NOT auto-resume");
 
         let paused = mgr.get_active().await.unwrap().unwrap();
         assert_eq!(paused.status, GoalStatus::Paused);
@@ -379,32 +395,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluate_after_turn_completion_claim_thrice_pauses() {
+    async fn evaluate_after_turn_completion_claim_keeps_challenging() {
+        // Repeated self-claimed completion no longer auto-pauses. The
+        // challenge prompt keeps nudging the agent toward `agent_judge`; the
+        // DB status remains `active` until a Judge verdict lands.
+        //
+        // The independent `MAX_IDLE_TURNS` path still pauses after three
+        // consecutive tool-less turns, so we exercise only two tool-less
+        // claim turns — that is enough to confirm the completion-claim
+        // branch returns `ChallengeEvidence` (and not a `Paused(IdleBlocked)`
+        // triggered by the former three-claim counter).
         let pool = setup_pool().await;
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
-        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+        mgr.create_goal("Test goal", None).await.unwrap();
 
-        // First claim: challenge only
-        let v1 = mgr.evaluate_after_turn("All done!", &goal);
-        assert!(matches!(v1, GoalVerdict::ChallengeEvidence));
+        for claim in ["All done!", "Everything is complete!"] {
+            let fresh = mgr.get_active().await.unwrap().unwrap();
+            let verdict = mgr.evaluate_after_turn(claim, &fresh);
+            assert!(
+                matches!(verdict, GoalVerdict::ChallengeEvidence),
+                "completion claim `{claim}` should keep producing ChallengeEvidence; got {verdict:?}"
+            );
+        }
 
-        let fresh1 = mgr.get_active().await.unwrap().unwrap();
-
-        // Second claim: challenge only
-        let v2 = mgr.evaluate_after_turn("Everything is complete!", &fresh1);
-        assert!(matches!(v2, GoalVerdict::ChallengeEvidence));
-
-        let fresh2 = mgr.get_active().await.unwrap().unwrap();
-
-        // Third claim: should pause (IdleBlocked)
-        let v3 = mgr.evaluate_after_turn("Finished everything!", &fresh2);
-        assert!(matches!(
-            v3,
-            GoalVerdict::Paused {
-                reason: PauseReason::IdleBlocked,
-                ..
-            }
-        ));
+        // No pause was ever written to the DB.
+        let active = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(active.status, GoalStatus::Active);
+        assert!(active.pause_reason.is_none());
     }
 
     #[tokio::test]
@@ -538,23 +555,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluate_after_turn_chinese_idle_phrase_pauses() {
+    async fn evaluate_after_turn_chinese_idle_phrase_no_longer_pauses() {
+        // Heuristic question-phrase detection has been removed. Short
+        // Chinese question-like responses must not flip the goal to paused;
+        // status transitions are reserved for explicit user commands and
+        // Judge verdicts. The independent `MAX_IDLE_TURNS` path still
+        // pauses after three consecutive tool-less turns, but the heuristic
+        // branch is gone.
         let pool = setup_pool().await;
         let mgr = GoalManager::new(pool.clone(), "thread-1".into(), test_runtime());
-        let goal = mgr.create_goal("Test goal", None).await.unwrap();
+        mgr.create_goal("Test goal", None).await.unwrap();
 
-        // One idle turn first, then short Chinese question-like response
-        mgr.evaluate_after_turn("随便聊聊", &goal);
+        // Reset the idle counter so MAX_IDLE_TURNS does not fire on the
+        // single-tool-less turn we care about.
+        mgr.record_tool_call("read");
         let fresh = mgr.get_active().await.unwrap().unwrap();
 
         let verdict = mgr.evaluate_after_turn("请确认这个方案是否可以？", &fresh);
-        assert!(matches!(
-            verdict,
-            GoalVerdict::Paused {
-                reason: PauseReason::IdleBlocked,
-                ..
-            }
-        ));
+        assert!(
+            !matches!(verdict, GoalVerdict::Paused { .. }),
+            "heuristic Chinese idle phrase should no longer pause the goal; got {verdict:?}"
+        );
+
+        let active = mgr.get_active().await.unwrap().unwrap();
+        assert_eq!(active.status, GoalStatus::Active);
+        assert!(active.pause_reason.is_none());
     }
 
     #[tokio::test]
