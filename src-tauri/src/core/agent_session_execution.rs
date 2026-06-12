@@ -2396,3 +2396,190 @@ mod has_process_requirements_tests {
         assert!(has_process_requirements("Need a Verify Each phase step."));
     }
 }
+
+#[cfg(test)]
+mod judge_summary_tests {
+    //! Integration tests for the two Judge-prompt context builders:
+    //!
+    //! * [`super::build_task_board_summary`] — surfaces the active task board
+    //!   (and its items) for the Judge to cross-check against the goal.
+    //! * [`super::build_process_compliance_summary`] — surfaces review
+    //!   helper history so the Judge can verify the agent followed the
+    //!   process-requirements contract.
+    //!
+    //! These functions are private and would otherwise only be exercised
+    //! through the Judge tool pipeline. The tests use raw SQL seeding on
+    //! a SQLite in-memory pool with migrations applied, matching the
+    //! pattern used by [`crate::goal_lifecycle`] tests.
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    use super::{build_process_compliance_summary, build_task_board_summary};
+
+    async fn setup_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-test', 'Test Workspace', '/tmp/test', '/tmp/test', '/tmp/test',
+                     0, 0, 0, 'ready', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("failed to seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, last_active_at, created_at, updated_at)
+             VALUES ('thread-1', 'ws-test', 'Test Thread', 'idle', ?, ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("failed to seed thread");
+
+        // run_helpers has a FK to thread_runs; seed one run to satisfy it.
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at, finished_at)
+             VALUES ('run-1', 'thread-1', 'default', 'completed', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("failed to seed run");
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn task_board_summary_reports_when_no_board_exists() {
+        let pool = setup_pool().await;
+
+        let summary = build_task_board_summary(&pool, "thread-1").await;
+
+        assert!(
+            summary.contains("No task board exists"),
+            "expected absent-board message, got: {summary}"
+        );
+        assert!(
+            summary.contains("file system and goal text"),
+            "absent-board summary should nudge Judge to file-system + goal verification, got: {summary}"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_board_summary_renders_active_items_and_skips_abandoned() {
+        let pool = setup_pool().await;
+
+        // Two active boards (one with items, one empty) + one abandoned.
+        sqlx::query(
+            "INSERT INTO task_boards (id, thread_id, title, status, created_at, updated_at)
+             VALUES ('board-1', 'thread-1', 'Implement feature', 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+                    ('board-2', 'thread-1', 'Write docs', 'active', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z'),
+                    ('board-3', 'thread-1', 'Old attempt', 'abandoned', '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO task_items (id, task_board_id, description, stage, sort_order, created_at, updated_at)
+             VALUES ('item-1', 'board-1', 'add API endpoint', 'completed', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+                    ('item-2', 'board-1', 'add CLI wiring', 'in_progress', 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let summary = build_task_board_summary(&pool, "thread-1").await;
+
+        // Active boards appear with status.
+        assert!(summary.contains("**Implement feature** (status: active)"));
+        assert!(summary.contains("**Write docs** (status: active)"));
+        // Abandoned boards are filtered out before rendering.
+        assert!(
+            !summary.contains("Old attempt"),
+            "abandoned board should be skipped, got: {summary}"
+        );
+        // Items render in the requested `stage / description` shape.
+        assert!(summary.contains("- [completed] add API endpoint"));
+        assert!(summary.contains("- [in_progress] add CLI wiring"));
+        // Empty board gets a placeholder.
+        assert!(summary.contains("(No task items.)"));
+        // Footer reminds the Judge to report non-completed steps as findings.
+        assert!(summary.contains("Report these as findings"));
+    }
+
+    #[tokio::test]
+    async fn process_compliance_summary_reports_when_no_reviews_exist() {
+        let pool = setup_pool().await;
+
+        let summary = build_process_compliance_summary(&pool, "thread-1").await;
+
+        assert!(
+            summary.contains("No review calls found"),
+            "expected absent-review message, got: {summary}"
+        );
+        assert!(summary.contains("non-compliance"));
+    }
+
+    #[tokio::test]
+    async fn process_compliance_summary_filters_to_review_helpers_only() {
+        let pool = setup_pool().await;
+
+        // Three helpers: one review, one explore, one review with a long
+        // input_summary to exercise the 200-char truncation path.
+        let long_input = "x".repeat(450);
+        sqlx::query(
+            "INSERT INTO run_helpers
+                (id, run_id, thread_id, helper_kind, status, input_summary, started_at, finished_at)
+             VALUES
+                ('rh-1', 'run-1', 'thread-1', 'agent_review', 'completed', 'review the diff', '2026-01-01T00:00:00.000Z', '2026-01-01T00:01:00.000Z'),
+                ('rh-2', 'run-1', 'thread-1', 'agent_explore', 'completed', 'scan code', '2026-01-01T00:02:00.000Z', '2026-01-01T00:03:00.000Z'),
+                ('rh-3', 'run-1', 'thread-1', 'helper_review', 'failed', ?1, '2026-01-01T00:04:00.000Z', '2026-01-01T00:05:00.000Z')",
+        )
+        .bind(&long_input)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let summary = build_process_compliance_summary(&pool, "thread-1").await;
+
+        // Both review helpers are listed.
+        assert!(summary.contains("`agent_review`"));
+        assert!(summary.contains("`helper_review`"));
+        // Non-review helpers are filtered out.
+        assert!(
+            !summary.contains("`agent_explore`"),
+            "non-review helper should be filtered, got: {summary}"
+        );
+        // Status symbols are mapped to a human label.
+        assert!(summary.contains("✓ completed"));
+        assert!(summary.contains("✗ failed"));
+        // Long input is truncated to 200 chars + ellipsis. We assert the
+        // exact trailing shape rather than digging for a specific line:
+        // the input was 450 'x' characters, so the rendered Scope line
+        // must end with 200 'x' chars followed by "...".
+        assert!(
+            summary.contains(&format!("{}...", "x".repeat(200))),
+            "long input should be truncated to 200 chars + '...'"
+        );
+    }
+}
