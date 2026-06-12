@@ -195,10 +195,7 @@ pub fn build_plan_artifact_from_tool_input(
     tool_input: &serde_json::Value,
     plan_revision: u32,
 ) -> PlanArtifact {
-    let root = tool_input
-        .get("plan")
-        .and_then(serde_json::Value::as_object)
-        .or_else(|| tool_input.as_object());
+    let root = tool_input.as_object();
 
     let title = root
         .and_then(|value| value.get("title"))

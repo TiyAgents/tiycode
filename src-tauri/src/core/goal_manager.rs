@@ -450,6 +450,20 @@ impl GoalManager {
                     "goal is Complete without judge_passed; treating as terminal and not re-opening"
                 );
             }
+
+            // A Judge can flip the goal to `complete` *inside* this run. The
+            // normal turn-accounting path below never runs for a non-active
+            // goal, so the final run that achieved the goal would otherwise not
+            // be billed — making the finished turn count drop by one versus
+            // what the user saw while the run was active. Idempotently account
+            // that final turn here (only the first call for this run id wins).
+            let mut goal = goal;
+            if goal_repo::account_turn_if_unevaluated(&self.pool, &goal.id, run_id).await? {
+                if let Some(updated) = self.get_active().await? {
+                    goal = updated;
+                }
+            }
+
             return Ok(Some(GoalEvaluationOutcome {
                 goal: Self::to_payload(&goal),
                 verdict: "skipped".to_string(),

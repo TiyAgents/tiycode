@@ -272,6 +272,7 @@ Phase 4 — Call update_plan:\n\
 - risks: main risks, edge cases, compatibility concerns, regression areas.\n\
 - assumptions (optional): only non-blocking assumptions, not open questions.\n\n\
 Prohibited: unresolved core ambiguities (use clarify first), TODO placeholders, vague steps, architecture guesses not backed by exploration, lengthy background essays without actionable information.\n\n\
+All required fields (title, summary, context, design, keyImplementation, steps, verification, risks) must be passed as non-empty top-level arguments. Do not wrap them in a nested object and never call this tool with empty arguments.\n\n\
 You may call this tool multiple times in a run to incrementally refine the plan. Each call overwrites the previous version.",
             serde_json::json!({
                 "type": "object",
@@ -310,49 +311,18 @@ You may call this tool multiple times in a run to incrementally refine the plan.
                     "assumptions": {
                         "type": "array",
                         "items": { "type": "string" }
-                    },
-                    "plan": {
-                        "type": "object",
-                        "description": "Optional nested plan payload. If provided, the runtime reads planning fields from this object.",
-                        "properties": {
-                            "title": { "type": "string" },
-                            "summary": { "type": "string" },
-                            "context": { "type": "string" },
-                            "design": { "type": "string" },
-                            "keyImplementation": { "type": "string" },
-                            "steps": {
-                                "type": "array",
-                                "items": {
-                                    "oneOf": [
-                                        { "type": "string" },
-                                        {
-                                            "type": "object",
-                                            "properties": {
-                                                "id": { "type": "string" },
-                                                "title": { "type": "string" },
-                                                "description": { "type": "string" },
-                                                "status": { "type": "string" },
-                                                "files": {
-                                                    "type": "array",
-                                                    "items": { "type": "string" }
-                                                }
-                                            }
-                                        }
-                                    ]
-                                }
-                            },
-                            "verification": { "type": "string" },
-                            "risks": {
-                                "type": "array",
-                                "items": { "type": "string" }
-                            },
-                            "assumptions": {
-                                "type": "array",
-                                "items": { "type": "string" }
-                            }
-                        }
                     }
-                }
+                },
+                "required": [
+                    "title",
+                    "summary",
+                    "context",
+                    "design",
+                    "keyImplementation",
+                    "steps",
+                    "verification",
+                    "risks"
+                ]
             }),
         ),
     ];

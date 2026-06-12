@@ -16,7 +16,7 @@ use crate::ipc::app_events::{
 use crate::ipc::frontend_channels::ThreadStreamEvent;
 use crate::model::errors::{AppError, ErrorSource};
 use crate::model::thread::{MessageRecord, RunStatus, ThreadStatus};
-use crate::persistence::repo::{message_repo, run_repo, thread_repo};
+use crate::persistence::repo::{message_repo, run_helper_repo, run_repo, thread_repo};
 
 use super::agent_run_manager::{AgentRunManager, StartRunOptions};
 
@@ -922,6 +922,55 @@ impl AgentRunManager {
                 run_id: run_id.to_string(),
                 task_board,
             });
+        }
+
+        // Backstop: converge any helper that is still non-terminal in the DB now
+        // that the run is finishing. A subagent (e.g. a Judge) whose own cleanup
+        // future was dropped during an interrupt/cancel can otherwise linger at
+        // `running` forever, since the frontend only flips helper status from
+        // live SubagentCompleted/Failed events. We mark them `interrupted` and
+        // emit a matching SubagentFailed so both the DB snapshot and the live
+        // event stream converge.
+        let helper_interrupt_reason = match status {
+            RunStatus::Cancelled => "Subagent interrupted because the run was cancelled.",
+            RunStatus::Interrupted => "Subagent interrupted because the run was interrupted.",
+            _ => "Subagent interrupted because the run finished while it was still active.",
+        };
+        match run_helper_repo::interrupt_non_terminal_by_run(
+            &self.pool,
+            run_id,
+            helper_interrupt_reason,
+        )
+        .await
+        {
+            Ok(orphaned) => {
+                if !orphaned.is_empty() {
+                    tracing::warn!(
+                        run_id = %run_id,
+                        count = orphaned.len(),
+                        "converged orphaned non-terminal run helpers to interrupted"
+                    );
+                }
+                for helper in orphaned {
+                    let _ = frontend_tx.send(ThreadStreamEvent::SubagentFailed {
+                        run_id: run_id.to_string(),
+                        subtask_id: helper.id,
+                        helper_kind: helper.helper_kind,
+                        started_at: helper.started_at,
+                        error: helper_interrupt_reason.to_string(),
+                        snapshot:
+                            crate::core::subagent::orchestrator::SubagentProgressSnapshot::default(
+                            ),
+                    });
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    %error,
+                    "failed to converge orphaned run helpers while finishing run"
+                );
+            }
         }
 
         finalize_run(
