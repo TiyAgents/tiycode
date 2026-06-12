@@ -1944,14 +1944,33 @@ Used for prompt assembly coverage.
         assert!(properties.contains_key("verification"));
         assert!(properties.contains_key("assumptions"));
 
-        let nested_plan_properties = update_plan.parameters["properties"]["plan"]["properties"]
-            .as_object()
-            .expect("nested plan properties should be object");
-        assert!(nested_plan_properties.contains_key("context"));
-        assert!(nested_plan_properties.contains_key("design"));
-        assert!(nested_plan_properties.contains_key("keyImplementation"));
-        assert!(nested_plan_properties.contains_key("verification"));
-        assert!(nested_plan_properties.contains_key("assumptions"));
+        assert!(
+            !properties.contains_key("plan"),
+            "update_plan should no longer expose a nested plan object"
+        );
+
+        let required = update_plan.parameters["required"]
+            .as_array()
+            .expect("update_plan required should be an array");
+        let required: Vec<&str> = required
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        for field in [
+            "title",
+            "summary",
+            "context",
+            "design",
+            "keyImplementation",
+            "steps",
+            "verification",
+            "risks",
+        ] {
+            assert!(
+                required.contains(&field),
+                "update_plan required should contain {field}"
+            );
+        }
     }
 
     #[test]
