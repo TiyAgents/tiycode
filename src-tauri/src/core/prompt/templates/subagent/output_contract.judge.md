@@ -15,7 +15,7 @@ Return exactly one JSON object with this contract and nothing else (no markdown 
 }
 
 Field rules:
-- `passed` (boolean): true only when the project genuinely satisfies the goal.
+- `passed` (boolean): true only when the project genuinely satisfies **every** goal requirement.
 - `completenessPct` (integer 0-100): your honest estimate of how complete the work is against the goal.
-- `findings` (array of strings): each concrete unmet / inconsistent / untested / broken point. REQUIRED and non-empty when `passed=false`.
+- `findings` (array of strings): each concrete unmet / inconsistent / untested / broken / not-wired point. REQUIRED and non-empty when `passed=false`. Each finding must reference a concrete file path and/or a specific goal requirement it violates. Do not accept vague descriptions — state exactly what file, what is missing, and what goal requirement is violated.
 - `summary` (string): rationale for the verdict. REQUIRED and non-empty when `passed=true` — it becomes the goal's completion evidence. If you cannot provide real evidence, set `passed=false`.

@@ -21,9 +21,16 @@
 
 use tiycore::agent::AgentMessage;
 use tiycore::types::{ContentBlock, TextContent, UserMessage};
-/// Reserve this many tokens for the model's response + overhead.
-/// Matches pi-mono `DEFAULT_COMPACTION_SETTINGS.reserveTokens`.
-const RESERVE_TOKENS: u32 = 16_384;
+/// Fraction of the model's context window that is reserved for the model's
+/// response + provider/tool overhead, expressed in basis points (1/100th of
+/// a percent). 2000 bps == 20%.
+const RESERVE_BASIS_POINTS: u32 = 2_000;
+
+/// Minimum number of tokens to keep reserved even when 20% of the context
+/// window is smaller than this floor. The previous hard-coded reserve of
+/// `16_384` tokens is preserved as a safe lower bound for typical large
+/// context windows while still allowing tiny windows to behave sanely.
+const RESERVE_TOKENS_MIN: u32 = 16_384;
 
 /// Keep at least this many tokens of recent conversation untouched.
 /// With LLM-generated summaries providing rich context, we can keep a
@@ -233,7 +240,7 @@ impl CompressionSettings {
     pub fn new(context_window: u32) -> Self {
         Self {
             context_window,
-            reserve_tokens: RESERVE_TOKENS,
+            reserve_tokens: reserve_tokens_for(context_window),
             keep_recent_tokens: KEEP_RECENT_TOKENS,
         }
     }
@@ -242,6 +249,19 @@ impl CompressionSettings {
     pub fn budget(&self) -> u32 {
         self.context_window.saturating_sub(self.reserve_tokens)
     }
+}
+
+/// Reserve `RESERVE_BASIS_POINTS` (20%) of the model's context window for
+/// the model's response + overhead, with `RESERVE_TOKENS_MIN` as a floor
+/// so that very small windows still keep a sane amount of headroom and
+/// huge windows don't get a pathologically tiny reserve.
+fn reserve_tokens_for(context_window: u32) -> u32 {
+    let percent_budget = ((context_window as u64)
+        .saturating_mul(RESERVE_BASIS_POINTS as u64)
+        .saturating_add(9_999))
+        / 10_000;
+    let percent_budget = percent_budget.min(u32::MAX as u64) as u32;
+    percent_budget.max(RESERVE_TOKENS_MIN)
 }
 
 // ---------------------------------------------------------------------------
@@ -909,6 +929,49 @@ mod tests {
         let calibration = ContextTokenCalibration::default().observe(1_000, 1_500);
 
         assert_eq!(calibration.apply_to_estimate(0), 0);
+    }
+
+    #[test]
+    fn compression_settings_reserves_twenty_percent_of_context_window() {
+        // For typical large context windows the 20% reserve is well above
+        // the 16,384 token floor, so the budget is exactly 80% of the
+        // window. This is the primary behaviour change: instead of
+        // reserving a fixed 16,384 tokens regardless of model, we reserve
+        // 20% of the model's actual context window.
+        let cases = [
+            (128_000_u32, 25_600_u32, 102_400_u32),    // GPT-4o class
+            (200_000_u32, 40_000_u32, 160_000_u32),    // Claude-class
+            (1_000_000_u32, 200_000_u32, 800_000_u32), // 1M-window class
+        ];
+        for (context_window, expected_reserve, expected_budget) in cases {
+            let settings = CompressionSettings::new(context_window);
+            assert_eq!(
+                settings.reserve_tokens, expected_reserve,
+                "20% reserve for {context_window}-token window",
+            );
+            assert_eq!(
+                settings.budget(),
+                expected_budget,
+                "80% budget for {context_window}-token window",
+            );
+        }
+    }
+
+    #[test]
+    fn compression_settings_reserve_clamps_to_minimum_for_small_windows() {
+        // When 20% of the window would be smaller than the safety floor
+        // (16,384 tokens), the floor takes over so tiny windows still
+        // keep enough headroom for the model response.
+        let settings = CompressionSettings::new(32_000);
+        // 20% of 32,000 = 6,400 < 16,384 → floor wins.
+        assert_eq!(settings.reserve_tokens, 16_384);
+        assert_eq!(settings.budget(), 32_000 - 16_384);
+
+        // Window at or below the floor: reserve equals the floor and
+        // saturating_sub protects `budget` from underflow.
+        let tiny = CompressionSettings::new(8_000);
+        assert_eq!(tiny.reserve_tokens, 16_384);
+        assert_eq!(tiny.budget(), 0);
     }
 
     #[test]

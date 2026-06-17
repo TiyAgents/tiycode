@@ -3,8 +3,11 @@ use serde::{Deserialize, Serialize};
 /// Input for the `agent_judge` tool (provided by the main agent).
 #[derive(Debug, Clone)]
 pub struct JudgeRequest {
-    /// The main agent's explanation of why it believes the goal is achieved,
-    /// and/or points it wants the Judge to focus on.
+    /// An optional note from the main agent about this verification request.
+    /// The Judge evaluates the project state independently against the goal
+    /// and does not rely on this field as a self-assessment. Parsed for
+    /// input validation; if absent, the Judge still runs and the value is
+    /// discarded by `execute_judge_tool`.
     pub task: String,
 }
 
@@ -17,8 +20,12 @@ impl JudgeRequest {
             .trim()
             .to_string();
 
+        // Task is optional; an empty task string is valid.
+        // The Judge does not receive the main agent's self-assessment.
         if task.is_empty() {
-            return Err("missing agent_judge task".to_string());
+            return Ok(Self {
+                task: "Goal acceptance verification".to_string(),
+            });
         }
 
         Ok(Self { task })
@@ -198,8 +205,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn judge_request_requires_task() {
-        assert!(JudgeRequest::from_tool_input(&serde_json::json!({})).is_err());
+    fn judge_request_empty_task_returns_default() {
+        // Empty task is now valid; returns a default task string.
+        let req = JudgeRequest::from_tool_input(&serde_json::json!({})).expect("empty task parses");
+        assert_eq!(req.task, "Goal acceptance verification");
         let req = JudgeRequest::from_tool_input(&serde_json::json!({ "task": " verify it " }))
             .expect("parses");
         assert_eq!(req.task, "verify it");

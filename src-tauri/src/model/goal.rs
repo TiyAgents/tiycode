@@ -80,17 +80,6 @@ impl PauseReason {
             }
         }
     }
-
-    /// Whether the goal should auto-resume when the user sends a new message.
-    pub fn auto_resume_on_user_message(&self) -> bool {
-        matches!(
-            self,
-            PauseReason::ClarifyPending
-                | PauseReason::PlanPending
-                | PauseReason::IdleBlocked
-                | PauseReason::Interrupted
-        )
-    }
 }
 
 /// Verdict from the post-turn evaluation.

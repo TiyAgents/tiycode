@@ -159,4 +159,18 @@ describe("buildThreadContextBadgeData", () => {
     expect(badge.rawUsedPercent).toBe(0);
     expect(badge.totalLabel).toBe("N/A");
   });
+
+  it("exposes the 80% compression threshold so the header can mark it", () => {
+    // The backend reserves 20% of the context window and triggers
+    // auto-compression when observed context_size exceeds the remaining
+    // 80% budget. The header pill mirrors the same ratio so the dashed
+    // marker is drawn at the exact boundary the runtime uses.
+    const badge = buildThreadContextBadgeData({
+      fallbackContextWindow: "1000",
+      fallbackModelDisplayName: "Selected Model",
+      runtimeUsage: makeRuntimeUsage(),
+    });
+
+    expect(badge.compressionThresholdRatio).toBe(0.8);
+  });
 });

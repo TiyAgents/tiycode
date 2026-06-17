@@ -1053,6 +1053,25 @@ const drawerWidth = useStore(uiLayoutStore, (s) => s.drawerWidth);
                                   width: `${contextBadge.usageRatio * 100}%`,
                                 }}
                               />
+                              {contextBadge.contextWindow &&
+                              contextBadge.contextWindow > 0 ? (
+                                <span
+                                  aria-hidden="true"
+                                  data-testid="context-compression-threshold"
+                                  className={cn(
+                                    "pointer-events-none absolute inset-y-0 w-px border-l border-dashed",
+                                    contextBadge.isExceeded
+                                      ? "border-red-500/70"
+                                      : "border-app-foreground/55",
+                                  )}
+                                  style={{
+                                    left: `${
+                                      contextBadge.compressionThresholdRatio *
+                                      100
+                                    }%`,
+                                  }}
+                                />
+                              ) : null}
                               <span className="relative inline-flex items-center gap-1.5 px-2 py-0.5">
                                 <span className="text-app-subtle">Context</span>
                                 <span

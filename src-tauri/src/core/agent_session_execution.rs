@@ -1612,21 +1612,23 @@ impl AgentSession {
         tool_call_storage_id: &str,
         tool_input: &serde_json::Value,
     ) -> AgentToolResult {
-        // Parse the main agent's task / rationale.
-        let request = match crate::core::subagent::JudgeRequest::from_tool_input(tool_input) {
-            Ok(request) => request,
-            Err(error) => {
-                tool_call_repo::update_result(
-                    &self.pool,
-                    tool_call_storage_id,
-                    &serde_json::json!({ "error": &error }).to_string(),
-                    "failed",
-                )
-                .await
-                .ok();
-                return agent_error_result(error);
-            }
-        };
+        // Validate the tool input shape. The main agent's optional note is
+        // not injected into the Judge prompt — the Judge evaluates the
+        // project state independently against the goal. Parsing is retained
+        // to reject malformed input (e.g. non-string `task` values) that
+        // would violate the tool JSON schema. A missing `task` is acceptable
+        // and falls back to a neutral default.
+        if let Err(error) = crate::core::subagent::JudgeRequest::from_tool_input(tool_input) {
+            tool_call_repo::update_result(
+                &self.pool,
+                tool_call_storage_id,
+                &serde_json::json!({ "error": &error }).to_string(),
+                "failed",
+            )
+            .await
+            .ok();
+            return agent_error_result(error);
+        }
 
         // Backstop: re-query goal state. agent_judge is injected only when an
         // un-verified goal exists, but a stale tool set or a direct call must be
@@ -1679,41 +1681,68 @@ impl AgentSession {
             return agent_error_result(err_msg);
         }
 
-        // Build the Judge task: inject the goal objective + status + last verdict
-        // so the Judge does not rely on the main agent's self-report.
-        let mut prior_verdict = String::new();
-        if goal.judge_evaluated_run_id.is_some() {
+        // Build the Judge task: inject the goal objective, the task board
+        // state, (when applicable) process compliance evidence, and (when
+        // this is a re-verification) the previous Judge verdict. The Judge
+        // receives no input from the main agent — it evaluates the project
+        // state independently against the goal. The previous verdict is
+        // included only as objective context so the Judge can confirm prior
+        // findings have actually been addressed, not as a starting point
+        // for a self-assessment.
+
+        // Query task board state for cross-reference.
+        let task_board_summary = build_task_board_summary(&self.pool, &goal.thread_id).await;
+
+        // Conditionally include process compliance layer for goals that
+        // require reviews or phase-by-phase verification.
+        let process_compliance = if has_process_requirements(&goal.objective) {
+            build_process_compliance_summary(&self.pool, &goal.thread_id).await
+        } else {
+            String::new()
+        };
+
+        // On re-verification, surface the prior Judge verdict as objective
+        // context so the Judge can confirm each prior finding has been
+        // genuinely resolved. This is read from the goal record (not from
+        // the main agent) and is empty on the first verification.
+        let prior_verdict = if goal.judge_evaluated_run_id.is_some() {
+            let mut section = String::new();
             if let Some(summary) = goal.judge_summary.as_deref() {
                 if !summary.trim().is_empty() {
-                    prior_verdict.push_str(&format!("\nPrevious Judge summary: {summary}"));
+                    section.push_str(&format!("\nPrevious Judge summary: {summary}"));
                 }
             }
             if let Some(findings_json) = goal.judge_findings.as_deref() {
                 if let Ok(findings) = serde_json::from_str::<Vec<String>>(findings_json) {
                     if !findings.is_empty() {
-                        prior_verdict.push_str("\nPrevious Judge findings:");
+                        section.push_str("\nPrevious Judge findings:");
                         for finding in findings {
-                            prior_verdict.push_str(&format!("\n- {finding}"));
+                            section.push_str(&format!("\n- {finding}"));
                         }
                     }
                 }
             }
-        }
+            section
+        } else {
+            String::new()
+        };
 
         let judge_task = format!(
             "You are verifying acceptance of the following goal for the current project.\n\n\
-Goal id: {goal_id}\n\
-Goal status: {status:?}\n\
-Goal objective:\n{objective}\n\
-{prior_verdict}\n\n\
-The main agent's note for this verification request:\n{task}\n\n\
+Goal objective:\n{objective}\n\n\
+{task_board_summary}\
+{process_compliance}\
+{prior_verdict}\n\
 Independently inspect the project's current state and decide whether it satisfies the goal. \
+You must verify ALL requirements in the goal, not just those that seem to have been worked on. \
+Cross-reference the task board state above with your file-system findings. \
+If this is a re-verification, confirm that every prior finding has been genuinely \
+resolved (do NOT accept claims of fix without verifying the actual change). \
 Return your structured JudgeReport verdict.",
-            goal_id = goal.id,
-            status = goal.status,
             objective = goal.objective,
+            task_board_summary = task_board_summary,
+            process_compliance = process_compliance,
             prior_verdict = prior_verdict,
-            task = request.task,
         );
 
         // Build a Judge delegate (depth 2, primary model) and run it.
@@ -1835,6 +1864,156 @@ Return your structured JudgeReport verdict.",
             })),
         }
     }
+}
+
+/// Build a human-readable summary of the task board state for the Judge.
+/// Returns a string describing each step and its stage, or a note that no
+/// task board exists.
+async fn build_task_board_summary(pool: &sqlx::SqlitePool, thread_id: &str) -> String {
+    use crate::persistence::repo::{task_board_repo, task_item_repo};
+
+    let boards = match task_board_repo::list_by_thread(pool, thread_id).await {
+        Ok(boards) => boards,
+        Err(_) => return "(No task board data available.)\n".to_string(),
+    };
+
+    if boards.is_empty() {
+        return "(No task board exists for this goal. Verify entirely from file system and goal text.)\n"
+            .to_string();
+    }
+
+    let mut summary = String::from("## Associated task board state\n\n");
+    for board in &boards {
+        // Skip abandoned boards — they are not relevant to the current goal.
+        if board.status.as_str() == "abandoned" {
+            continue;
+        }
+        summary.push_str(&format!(
+            "**{}** (status: {}):\n",
+            board.title,
+            board.status.as_str()
+        ));
+
+        let items = match task_item_repo::list_by_task_board(pool, &board.id).await {
+            Ok(items) => items,
+            Err(_) => {
+                summary.push_str("  (Could not load task items.)\n");
+                continue;
+            }
+        };
+
+        if items.is_empty() {
+            summary.push_str("  (No task items.)\n");
+            continue;
+        }
+
+        for item in &items {
+            summary.push_str(&format!(
+                "  - [{}] {}\n",
+                item.stage.as_str(),
+                item.description
+            ));
+        }
+    }
+
+    summary.push_str(
+        "\n**Important**: Any step above that is not `completed` and maps to a goal \
+         requirement is evidence of incomplete work. Report these as findings.\n",
+    );
+    summary
+}
+
+/// Check whether the goal objective contains process requirements (e.g.,
+/// "review each phase", "每阶段验收"). When true, the Judge prompt will
+/// include a process compliance layer showing the thread's review call history.
+fn has_process_requirements(objective: &str) -> bool {
+    let lower = objective.to_lowercase();
+    let keywords = [
+        "review",
+        "验收",
+        "检查",
+        "verify each",
+        "verify every",
+        "per phase",
+        "每个阶段",
+        "每一阶段",
+        "每轮",
+        "阶段完成",
+    ];
+    keywords.iter().any(|kw| lower.contains(&kw.to_lowercase()))
+}
+
+/// Build a process compliance summary from the thread's run_helper history.
+/// Lists all review-related helper calls chronologically with their input
+/// summaries and status. Only meaningful when the goal objective contains
+/// process requirements (e.g., "each phase must have a review").
+async fn build_process_compliance_summary(pool: &sqlx::SqlitePool, thread_id: &str) -> String {
+    use crate::persistence::repo::run_helper_repo;
+
+    let helpers = match run_helper_repo::list_by_thread_id(pool, thread_id).await {
+        Ok(h) => h,
+        Err(_) => return String::new(),
+    };
+
+    // Filter for review-related calls: agent_review, helper_review
+    let reviews: Vec<_> = helpers
+        .iter()
+        .filter(|h| h.helper_kind.contains("review"))
+        .collect();
+
+    if reviews.is_empty() {
+        return format!(
+            "## Process compliance\n\n\
+            No review calls found in thread history. \
+            If the goal requires reviews, this is evidence of non-compliance.\n\n"
+        );
+    }
+
+    let mut summary = String::from("## Process compliance\n\n");
+    summary.push_str("The following review calls were recorded during this goal:\n\n");
+
+    for (i, review) in reviews.iter().enumerate() {
+        let status_label = match review.status.as_str() {
+            "completed" => "✓ completed",
+            "failed" => "✗ failed",
+            "interrupted" => "⚠ interrupted",
+            _ => &review.status,
+        };
+
+        let input_preview = review
+            .input_summary
+            .as_deref()
+            .map(|s| {
+                // Truncate to first 200 chars for readability (character-safe,
+                // avoids panicking on multi-byte UTF-8 sequences).
+                if s.chars().count() > 200 {
+                    format!("{}...", s.chars().take(200).collect::<String>())
+                } else {
+                    s.to_string()
+                }
+            })
+            .unwrap_or_else(|| "(no task description)".to_string());
+
+        summary.push_str(&format!(
+            "{}. `{}` called at {} (status: {})\n   Scope: {}\n",
+            i + 1,
+            review.helper_kind,
+            // Truncate to first 19 chars (RFC3339 timestamp prefix) using
+            // char-aware slicing to avoid panicking on multi-byte UTF-8
+            // boundaries — mirrors the 200-char limit used on
+            // `input_preview` above.
+            review.started_at.chars().take(19).collect::<String>(),
+            status_label,
+            input_preview,
+        ));
+    }
+
+    summary.push_str(
+        "\n**Guidance**: If the goal requires reviews at specific milestones \
+         (e.g., \"after each phase\"), verify that the review calls above \
+         cover all required milestones. Missing or failed reviews are findings.\n\n",
+    );
+    summary
 }
 
 #[cfg(test)]
@@ -2139,5 +2318,268 @@ mod tests {
             provider_options: None,
             model,
         }
+    }
+}
+
+#[cfg(test)]
+mod has_process_requirements_tests {
+    use super::has_process_requirements;
+
+    #[test]
+    fn detects_english_keywords() {
+        for objective in [
+            "Each phase needs a code review before merge.",
+            "Verify every change against the spec.",
+            "Run a per phase smoke test.",
+        ] {
+            assert!(
+                has_process_requirements(objective),
+                "expected keyword match in: {objective}"
+            );
+        }
+    }
+
+    #[test]
+    fn detects_cjk_keywords() {
+        for objective in [
+            "每个阶段都需要验收",
+            "每一阶段检查通过",
+            "需要你每轮 review",
+            "完成所有阶段完成的任务",
+        ] {
+            assert!(
+                has_process_requirements(objective),
+                "expected CJK keyword match in: {objective}"
+            );
+        }
+    }
+
+    #[test]
+    fn records_substring_match_semantics() {
+        // The implementation is a plain case-insensitive substring match
+        // over a fixed keyword list. These cases pin down the current
+        // behaviour, including the substring-match quirk where "review"
+        // hits inside "preview". They are not assertions about an ideal
+        // matcher — they are regression guards against accidental keyword
+        // list changes. If the keyword list is later tightened, update
+        // this test alongside it.
+        assert!(
+            has_process_requirements("Preview the rendered HTML before shipping."),
+            "current implementation matches 'review' inside 'preview' (substring match)"
+        );
+        assert!(
+            !has_process_requirements("Forward-looking design without explicit verify step."),
+            "no keyword substring present"
+        );
+        // "审阅" (look over) is intentionally NOT a keyword — only
+        // "验收" (formal acceptance) and "检查" (check) are, so this
+        // should be rejected.
+        assert!(
+            !has_process_requirements("请仔细审阅代码风格。"),
+            "审阅 does not contain any current keyword"
+        );
+        assert!(
+            !has_process_requirements("Survey users about preferences."),
+            "no keyword substring present"
+        );
+    }
+
+    #[test]
+    fn empty_and_whitespace_objectives_return_false() {
+        assert!(!has_process_requirements(""));
+        assert!(!has_process_requirements("   \n\t  "));
+    }
+
+    #[test]
+    fn keyword_match_is_case_insensitive() {
+        assert!(has_process_requirements("Final REVIEW before release."));
+        assert!(has_process_requirements("Need a Verify Each phase step."));
+    }
+}
+
+#[cfg(test)]
+mod judge_summary_tests {
+    //! Integration tests for the two Judge-prompt context builders:
+    //!
+    //! * [`super::build_task_board_summary`] — surfaces the active task board
+    //!   (and its items) for the Judge to cross-check against the goal.
+    //! * [`super::build_process_compliance_summary`] — surfaces review
+    //!   helper history so the Judge can verify the agent followed the
+    //!   process-requirements contract.
+    //!
+    //! These functions are private and would otherwise only be exercised
+    //! through the Judge tool pipeline. The tests use raw SQL seeding on
+    //! a SQLite in-memory pool with migrations applied, matching the
+    //! pattern used by [`crate::goal_lifecycle`] tests.
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    use super::{build_process_compliance_summary, build_task_board_summary};
+
+    async fn setup_pool() -> SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        crate::persistence::sqlite::run_migrations(&pool)
+            .await
+            .unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-test', 'Test Workspace', '/tmp/test', '/tmp/test', '/tmp/test',
+                     0, 0, 0, 'ready', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("failed to seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, last_active_at, created_at, updated_at)
+             VALUES ('thread-1', 'ws-test', 'Test Thread', 'idle', ?, ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("failed to seed thread");
+
+        // run_helpers has a FK to thread_runs; seed one run to satisfy it.
+        sqlx::query(
+            "INSERT INTO thread_runs (id, thread_id, run_mode, status, started_at, finished_at)
+             VALUES ('run-1', 'thread-1', 'default', 'completed', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("failed to seed run");
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn task_board_summary_reports_when_no_board_exists() {
+        let pool = setup_pool().await;
+
+        let summary = build_task_board_summary(&pool, "thread-1").await;
+
+        assert!(
+            summary.contains("No task board exists"),
+            "expected absent-board message, got: {summary}"
+        );
+        assert!(
+            summary.contains("file system and goal text"),
+            "absent-board summary should nudge Judge to file-system + goal verification, got: {summary}"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_board_summary_renders_active_items_and_skips_abandoned() {
+        let pool = setup_pool().await;
+
+        // Two active boards (one with items, one empty) + one abandoned.
+        sqlx::query(
+            "INSERT INTO task_boards (id, thread_id, title, status, created_at, updated_at)
+             VALUES ('board-1', 'thread-1', 'Implement feature', 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+                    ('board-2', 'thread-1', 'Write docs', 'active', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z'),
+                    ('board-3', 'thread-1', 'Old attempt', 'abandoned', '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO task_items (id, task_board_id, description, stage, sort_order, created_at, updated_at)
+             VALUES ('item-1', 'board-1', 'add API endpoint', 'completed', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+                    ('item-2', 'board-1', 'add CLI wiring', 'in_progress', 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let summary = build_task_board_summary(&pool, "thread-1").await;
+
+        // Active boards appear with status.
+        assert!(summary.contains("**Implement feature** (status: active)"));
+        assert!(summary.contains("**Write docs** (status: active)"));
+        // Abandoned boards are filtered out before rendering.
+        assert!(
+            !summary.contains("Old attempt"),
+            "abandoned board should be skipped, got: {summary}"
+        );
+        // Items render in the requested `stage / description` shape.
+        assert!(summary.contains("- [completed] add API endpoint"));
+        assert!(summary.contains("- [in_progress] add CLI wiring"));
+        // Empty board gets a placeholder.
+        assert!(summary.contains("(No task items.)"));
+        // Footer reminds the Judge to report non-completed steps as findings.
+        assert!(summary.contains("Report these as findings"));
+    }
+
+    #[tokio::test]
+    async fn process_compliance_summary_reports_when_no_reviews_exist() {
+        let pool = setup_pool().await;
+
+        let summary = build_process_compliance_summary(&pool, "thread-1").await;
+
+        assert!(
+            summary.contains("No review calls found"),
+            "expected absent-review message, got: {summary}"
+        );
+        assert!(summary.contains("non-compliance"));
+    }
+
+    #[tokio::test]
+    async fn process_compliance_summary_filters_to_review_helpers_only() {
+        let pool = setup_pool().await;
+
+        // Three helpers: one review, one explore, one review with a long
+        // input_summary to exercise the 200-char truncation path.
+        let long_input = "x".repeat(450);
+        sqlx::query(
+            "INSERT INTO run_helpers
+                (id, run_id, thread_id, helper_kind, status, input_summary, started_at, finished_at)
+             VALUES
+                ('rh-1', 'run-1', 'thread-1', 'agent_review', 'completed', 'review the diff', '2026-01-01T00:00:00.000Z', '2026-01-01T00:01:00.000Z'),
+                ('rh-2', 'run-1', 'thread-1', 'agent_explore', 'completed', 'scan code', '2026-01-01T00:02:00.000Z', '2026-01-01T00:03:00.000Z'),
+                ('rh-3', 'run-1', 'thread-1', 'helper_review', 'failed', ?1, '2026-01-01T00:04:00.000Z', '2026-01-01T00:05:00.000Z')",
+        )
+        .bind(&long_input)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let summary = build_process_compliance_summary(&pool, "thread-1").await;
+
+        // Both review helpers are listed.
+        assert!(summary.contains("`agent_review`"));
+        assert!(summary.contains("`helper_review`"));
+        // Non-review helpers are filtered out.
+        assert!(
+            !summary.contains("`agent_explore`"),
+            "non-review helper should be filtered, got: {summary}"
+        );
+        // Status symbols are mapped to a human label.
+        assert!(summary.contains("✓ completed"));
+        assert!(summary.contains("✗ failed"));
+        // Long input is truncated to 200 chars + ellipsis. We assert the
+        // exact trailing shape rather than digging for a specific line:
+        // the input was 450 'x' characters, so the rendered Scope line
+        // must end with 200 'x' chars followed by "...".
+        assert!(
+            summary.contains(&format!("{}...", "x".repeat(200))),
+            "long input should be truncated to 200 chars + '...'"
+        );
     }
 }
