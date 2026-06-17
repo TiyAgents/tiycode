@@ -4,6 +4,136 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.19] - 2026-06-17
+### :boom: BREAKING CHANGES
+- due to [`6c0f5aa`](https://github.com/tiylabs/tiycode/commit/6c0f5aabf71a11b23bdfc8d2ea7f89a195c5a777) - ✨ 引入 Judge 验收 Agent 替代 goal_scored 自证 *(PR [#224](https://github.com/tiylabs/tiycode/pull/224) by [@HayWolf](https://github.com/HayWolf))*:
+
+  GoalEvaluateResult.verdict no longer includes "complete"  
+  * docs: 📝 update and reorder README feature list  
+  Update the feature descriptions and reorder the bullet points in both  
+  README.md and README_zh.md to better reflect the current product  
+  capabilities and improve readability. Changes include:  
+  - Reordering features to highlight persistent goal management, real-time  
+    streaming, and extensibility earlier in the list  
+  - Updating descriptions for several features to be more accurate  
+  - Maintaining consistency between English and Chinese versions  
+  - Keeping the overall structure while improving flow  
+  These are documentation-only changes that do not affect functionality.  
+  * refactor(goal): ♻️ extract resolveGoalStatusKey for testability  
+  - Extract inline status key resolution into a pure exported function  
+    so the complete→verified (judgePassed) branch can be unit-tested  
+    without mounting the component  
+  - Add unit tests covering all status mappings and judgePassed variants  
+  - Add test for skipped verdict passthrough in goalEvaluate  
+  * refactor(subagent): 🔧 increase builtin default max delegation depth to 5  
+  Raise `BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH` from 3 to 5 to match the  
+  existing `GLOBAL_MAX_DELEGATION_DEPTH`, allowing built-in subagents  
+  (explore/review) to be delegated to the same depth as custom profiles.  
+  Update delegation validation tests to reflect the new depth limits.  
+  * docs: 📝 remove obsolete design document  
+  * docs(judge): 📝 add size-first verification strategy and delegation guidelines  
+  * refactor(goal): ♻️ remove goal-level time_used_seconds in favor of run-level elapsed tracking  
+  ---------
+
+- due to [`6bf6da9`](https://github.com/tiylabs/tiycode/commit/6bf6da92995f128299ed3feb04045118ccd9340a) - 🐛 converge orphaned subagents and account final turns for judge-completed goals *(PR [#226](https://github.com/tiylabs/tiycode/pull/226) by [@HayWolf](https://github.com/HayWolf))*:
+
+  内部 `AgentSession.context_compression_state`  
+  及其关联启发式 API 已移除,替换为  
+  `AgentSession.last_observed_usage: Arc<StdMutex<Option<Usage>>>`;  
+  前端 `RunUsageDto` 新增必填 `contextSize`,旧 `totalTokens` 保留  
+  为 wire-level 显示。任何外部消费方需更新到新字段。  
+  Refs: tiycore 0.2.10-rc.2 `Usage::context_size()`  
+  ---------
+
+- due to [`f05858c`](https://github.com/tiylabs/tiycode/commit/f05858c43469bfe5d5d54f161d21173637372419) - ♻️ flatten update_plan input *(PR [#228](https://github.com/tiylabs/tiycode/pull/228) by [@HayWolf](https://github.com/HayWolf))*:
+
+  update_plan no longer accepts a nested `plan`  
+  object. Clients must pass all fields as top-level arguments.
+
+- due to [`ba6a73c`](https://github.com/tiylabs/tiycode/commit/ba6a73c60f870df32e540e337bbf1c9541343f2f) - ✨ replace self-attested goal completion with independent Judge subagent *(PR [#227](https://github.com/tiylabs/tiycode/pull/227) by [@jorben](https://github.com/jorben))*:
+
+  GoalEvaluateResult.verdict no longer includes "complete"  
+  * docs: 📝 update and reorder README feature list  
+  Update the feature descriptions and reorder the bullet points in both  
+  README.md and README_zh.md to better reflect the current product  
+  capabilities and improve readability. Changes include:  
+  - Reordering features to highlight persistent goal management, real-time  
+    streaming, and extensibility earlier in the list  
+  - Updating descriptions for several features to be more accurate  
+  - Maintaining consistency between English and Chinese versions  
+  - Keeping the overall structure while improving flow  
+  These are documentation-only changes that do not affect functionality.  
+  * refactor(goal): ♻️ extract resolveGoalStatusKey for testability  
+  - Extract inline status key resolution into a pure exported function  
+    so the complete→verified (judgePassed) branch can be unit-tested  
+    without mounting the component  
+  - Add unit tests covering all status mappings and judgePassed variants  
+  - Add test for skipped verdict passthrough in goalEvaluate  
+  * refactor(subagent): 🔧 increase builtin default max delegation depth to 5  
+  Raise `BUILTIN_DEFAULT_MAX_DELEGATION_DEPTH` from 3 to 5 to match the  
+  existing `GLOBAL_MAX_DELEGATION_DEPTH`, allowing built-in subagents  
+  (explore/review) to be delegated to the same depth as custom profiles.  
+  Update delegation validation tests to reflect the new depth limits.  
+  * docs: 📝 remove obsolete design document  
+  * docs(judge): 📝 add size-first verification strategy and delegation guidelines  
+  * refactor(goal): ♻️ remove goal-level time_used_seconds in favor of run-level elapsed tracking  
+  * feat(judge): ✨ redesign Judge evaluation for independence and completeness  
+  * fix(subagent): 🐛 make task field optional and fix UTF-8 safe truncation  
+  - Downgrade Judge prompt versions from 2 to 1 (likely a revert of unintended bump)  
+  - Change `task` field from required to optional in Judge tool schema, with updated description clarifying it is an optional note  
+  - Replace byte-based truncation with character-safe truncation to avoid panicking on multi-byte UTF-8 in process compliance summary  
+  - Simplify Judge request validation to only check input validity, discarding the parsed result used only for backward compatibility  
+  - Skip abandoned task boards when building summary to focus on relevant goal state  
+  * chore(deps): 🔧 align tiycore to 0.2.10-rc.2 and adopt Usage::context_size()  
+  Cherry-pick the master commit (a03d9ba) that bumps tiycore from 0.2.9  
+  to 0.2.10-rc.2 and unifies context_size semantics across  
+  RunUsageDto / frontend badge / auto-compression, removing the old  
+  initial_context_calibration heuristic path. No file conflict with  
+  the Judge work in this branch — the 25 files touched here do not  
+  overlap with the 6 Judge files resolved in the previous merge.  
+  * refactor(goal): ♻️ centralize status transitions to explicit commands and Judge verdicts  
+  * fix(agent): 🐛 fix timestamp slicing panic and add has_process_requirements tests  
+  Replace byte-index slicing with char-aware truncation to prevent  
+  panics on multi-byte UTF-8 boundaries in timestamp formatting.  
+  Add unit tests for `has_process_requirements()` covering English  
+  and CJK keywords, substring match behaviour, edge cases, and  
+  case-insensitive matching.  
+  * feat(compression): ✨ reserve 20% context window for auto-compression trigger  
+  Backend: replace fixed 16,384 token reserve with 20% of model context  
+  window (min floor 16,384).  Small-window models keep the floor; GPT-4o  
+  class windows reserve ~25.6K, Claude-class ~40K, 1M-window ~200K.  
+  Frontend: add dashed threshold marker at 80% position in the thread  
+  header context pill so users can see when auto-compression will fire.  
+  * fix(run): 🐛 record elapsed running time when interrupting active runs  
+  * test: cover Judge summary builders and mapRunSummaryToContextUsage fallback  
+  Add four integration tests in agent_session_execution.rs for the  
+  Judge-prompt context builders (build_task_board_summary,  
+  build_process_compliance_summary) covering absent boards, active/abandoned  
+  board filtering, review-only helper filtering, status symbol mapping, and  
+  200-char input truncation.  
+  Add six unit tests in runtime-thread-surface-state.test.ts for  
+  mapRunSummaryToContextUsage covering null input, explicit contextSize  
+  precedence, fallback to per-bucket sum, and full-field passthrough.  
+  Addresses review feedback from PR #227 (round 4):
+
+
+### :sparkles: New Features
+- [`00c6637`](https://github.com/tiylabs/tiycode/commit/00c6637bd3ae6002f40882bd5c1ff786b58262ef) - **ui**: ✨ enable text selection in markdown preview and overlay *(PR [#221](https://github.com/tiylabs/tiycode/pull/221) by [@HayWolf](https://github.com/HayWolf))*
+- [`55e774b`](https://github.com/tiylabs/tiycode/commit/55e774b49bacb7aaebcb9cb2548bffb4718b62c7) - **subagent**: ✨ Add nested subagent delegation with configurable depth limits *(PR [#223](https://github.com/tiylabs/tiycode/pull/223) by [@HayWolf](https://github.com/HayWolf))*
+- [`6c0f5aa`](https://github.com/tiylabs/tiycode/commit/6c0f5aabf71a11b23bdfc8d2ea7f89a195c5a777) - **goal**: ✨ 引入 Judge 验收 Agent 替代 goal_scored 自证 *(PR [#224](https://github.com/tiylabs/tiycode/pull/224) by [@HayWolf](https://github.com/HayWolf))*
+- [`ba6a73c`](https://github.com/tiylabs/tiycode/commit/ba6a73c60f870df32e540e337bbf1c9541343f2f) - **judge**: ✨ replace self-attested goal completion with independent Judge subagent *(PR [#227](https://github.com/tiylabs/tiycode/pull/227) by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`3690958`](https://github.com/tiylabs/tiycode/commit/3690958302f82f6ab5b9e92c3bf0479ee2036b47) - **core**: 🐛 fix Windows cross-compilation type errors *(PR [#219](https://github.com/tiylabs/tiycode/pull/219) by [@jorben](https://github.com/jorben))*
+- [`6bf6da9`](https://github.com/tiylabs/tiycode/commit/6bf6da92995f128299ed3feb04045118ccd9340a) - **core**: 🐛 converge orphaned subagents and account final turns for judge-completed goals *(PR [#226](https://github.com/tiylabs/tiycode/pull/226) by [@HayWolf](https://github.com/HayWolf))*
+
+### :recycle: Refactors
+- [`3a077c1`](https://github.com/tiylabs/tiycode/commit/3a077c10587d26ae031949c4181956c0b4568cf5) - **thread**: ♻️ track cumulative thread elapsed time across runs *(PR [#220](https://github.com/tiylabs/tiycode/pull/220) by [@jorben](https://github.com/jorben))*
+- [`96e7710`](https://github.com/tiylabs/tiycode/commit/96e7710404503d9bf94867c927367b709fe76fea) - **prompt**: ♻️ Overhaul prompt injection with modular layered architecture *(PR [#222](https://github.com/tiylabs/tiycode/pull/222) by [@jorben](https://github.com/jorben))*
+- [`fe7fbfc`](https://github.com/tiylabs/tiycode/commit/fe7fbfcdf55c636a1ff94e0116a9d1dd50fd52c6) - **workbench**: ♻️ remove runMode from frontend state management *(PR [#225](https://github.com/tiylabs/tiycode/pull/225) by [@jorben](https://github.com/jorben))*
+- [`f05858c`](https://github.com/tiylabs/tiycode/commit/f05858c43469bfe5d5d54f161d21173637372419) - **core**: ♻️ flatten update_plan input *(PR [#228](https://github.com/tiylabs/tiycode/pull/228) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.3.18] - 2026-06-01
 ### :sparkles: New Features
 - [`84bbd83`](https://github.com/tiylabs/tiycode/commit/84bbd83f66008f6f7dbaf8ab62ed5bf1635d75b2) - **workbench-shell**: ✨ add context window exceeded indicator and fallback window priority *(PR [#212](https://github.com/tiylabs/tiycode/pull/212) by [@HayWolf](https://github.com/HayWolf))*
@@ -814,3 +944,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.16]: https://github.com/tiylabs/tiycode/compare/0.3.15...0.3.16
 [0.3.17]: https://github.com/tiylabs/tiycode/compare/0.3.16...0.3.17
 [0.3.18]: https://github.com/tiylabs/tiycode/compare/0.3.17...0.3.18
+[0.3.19]: https://github.com/tiylabs/tiycode/compare/0.3.18...0.3.19
