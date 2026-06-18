@@ -393,11 +393,15 @@ export function mapRecordedUserMessage(event: RecordedUserMessageEvent): Surface
 export function formatApprovalPromptState(state: string, approvedAction: PlanApprovalAction | null, t: (key: TranslationKey) => string) {
   switch (state) {
     case "approved":
-      return approvedAction === "apply_plan_with_context_reset"
-        ? t("plan.approvedClearAndImplement")
-        : approvedAction === "apply_plan"
-          ? t("plan.approvedImplement")
-          : t("plan.approvedToImplement")
+      if (approvedAction === "apply_plan_with_context_reset") {
+        return t("plan.approvedClearAndImplement");
+      }
+      if (approvedAction === "apply_plan_with_goal") {
+        return t("plan.approvedGoalImplement");
+      }
+      return approvedAction === "apply_plan"
+        ? t("plan.approvedImplement")
+        : t("plan.approvedToImplement");
     case "superseded":
       return t("plan.superseded");
     default:

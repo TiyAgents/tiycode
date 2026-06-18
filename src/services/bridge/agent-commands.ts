@@ -606,7 +606,7 @@ export async function threadSubscribeRun(
 export async function threadExecuteApprovedPlan(
   threadId: string,
   approvalMessageId: string,
-  action: "apply_plan" | "apply_plan_with_context_reset",
+  action: "apply_plan" | "apply_plan_with_context_reset" | "apply_plan_with_goal",
   onEvent: (event: ThreadStreamEvent) => void,
 ): Promise<string> {
   requireTauri("thread_execute_approved_plan");

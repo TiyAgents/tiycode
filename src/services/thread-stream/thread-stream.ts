@@ -357,7 +357,7 @@ export class ThreadStream {
   async executeApprovedPlan(
     threadId: string,
     approvalMessageId: string,
-    action: "apply_plan" | "apply_plan_with_context_reset",
+    action: "apply_plan" | "apply_plan_with_context_reset" | "apply_plan_with_goal",
   ): Promise<string> {
     try {
       const runId = await threadExecuteApprovedPlan(

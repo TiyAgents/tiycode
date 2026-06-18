@@ -82,6 +82,9 @@ pub(crate) fn build_implementation_handoff_prompt(
         PlanApprovalAction::ApplyPlanWithContextReset => {
             "The user approved this plan after clearing the planning conversation from the implementation context."
         }
+        PlanApprovalAction::ApplyPlanWithGoal => {
+            "The user approved this plan for goal-driven implementation with context reset."
+        }
     };
     let plan_file_note = crate::core::plan_checkpoint::plan_file_path(thread_id)
         .filter(|path| path.exists())
@@ -99,12 +102,14 @@ pub(crate) fn build_implementation_handoff_prompt(
                 &plan_markdown,
             )
         }
-        PlanApprovalAction::ApplyPlanWithContextReset => render_handoff_template_no_plan(
-            include_str!("prompt/templates/handoff/without_plan.tpl.md"),
-            action_note,
-            &metadata.artifact.plan_revision.to_string(),
-            &plan_file_note,
-        ),
+        PlanApprovalAction::ApplyPlanWithContextReset | PlanApprovalAction::ApplyPlanWithGoal => {
+            render_handoff_template_no_plan(
+                include_str!("prompt/templates/handoff/without_plan.tpl.md"),
+                action_note,
+                &metadata.artifact.plan_revision.to_string(),
+                &plan_file_note,
+            )
+        }
     }
 }
 

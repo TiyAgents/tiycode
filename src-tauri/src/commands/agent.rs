@@ -145,6 +145,7 @@ pub async fn thread_execute_approved_plan(
     let action = match action.as_str() {
         "apply_plan" => PlanApprovalAction::ApplyPlan,
         "apply_plan_with_context_reset" => PlanApprovalAction::ApplyPlanWithContextReset,
+        "apply_plan_with_goal" => PlanApprovalAction::ApplyPlanWithGoal,
         other => {
             return Err(AppError::recoverable(
                 crate::model::errors::ErrorSource::Thread,
