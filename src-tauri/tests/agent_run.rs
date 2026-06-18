@@ -1121,3 +1121,199 @@ async fn test_render_validation_failure_persists_failed_tool_call() {
         .unwrap()
         .contains("valid 'spec' object"));
 }
+
+// =========================================================================
+// ApplyPlanWithGoal: goal-creation integration test
+// =========================================================================
+
+#[tokio::test]
+async fn test_execute_approved_plan_with_goal_creates_goal_record() {
+    use std::sync::{Arc, Mutex as StdMutex};
+    use tiycode_lib::core::agent_run_manager::AgentRunManager;
+    use tiycode_lib::core::app_event_emitter::NoopAppEventEmitter;
+    use tiycode_lib::core::app_state::GoalRuntimeState;
+    use tiycode_lib::core::built_in_agent_runtime::BuiltInAgentRuntime;
+    use tiycode_lib::core::plan_checkpoint::{
+        build_plan_artifact_from_tool_input, build_plan_message_metadata, ApprovalPromptMetadata,
+        PlanApprovalAction, PlanApprovalOption, IMPLEMENTATION_PLAN_APPROVAL_KIND,
+        IMPLEMENTATION_PLAN_PENDING_STATE,
+    };
+    use tiycode_lib::core::sleep_manager::SleepManager;
+    use tiycode_lib::core::terminal_manager::TerminalManager;
+    use tiycode_lib::core::tool_gateway::ToolGateway;
+    use tiycode_lib::model::thread::MessageRecord;
+    use tiycode_lib::persistence::repo::{goal_repo, message_repo, run_repo};
+
+    let pool = test_helpers::setup_test_pool().await;
+    test_helpers::seed_workspace(&pool, "ws-goal-plan", "/tmp/goal-plan").await;
+    test_helpers::seed_thread(&pool, "t-goal-plan", "ws-goal-plan", None).await;
+
+    // Insert a provider so build_session_spec can resolve the model plan.
+    sqlx::query(
+        "INSERT INTO providers (
+            id, provider_kind, provider_key, name, protocol_type, base_url,
+            api_key_encrypted, enabled, mapping_locked
+         ) VALUES ('prov-goal', 'builtin', 'openai', 'OpenAI', 'openai',
+                   'https://api.openai.com/v1', 'sk-test', 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Model plan JSON matching the provider we just seeded.
+    let model_plan = serde_json::json!({
+        "primary": {
+            "providerId": "prov-goal",
+            "modelRecordId": "model-goal",
+            "providerType": "openai",
+            "providerName": "OpenAI",
+            "model": "gpt-4.1",
+            "modelId": "gpt-4.1",
+            "modelDisplayName": "GPT-4.1",
+            "baseUrl": "https://api.openai.com/v1",
+            "contextWindow": "128000",
+            "maxOutputTokens": "16384"
+        }
+    });
+
+    // Create the planning run with the model plan.
+    run_repo::insert(
+        &pool,
+        &run_repo::RunInsert {
+            id: "r-planning".to_string(),
+            thread_id: "t-goal-plan".to_string(),
+            profile_id: None,
+            run_mode: "plan".to_string(),
+            provider_id: None,
+            model_id: None,
+            effective_model_plan_json: Some(model_plan.to_string()),
+            status: "waiting_approval".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Create the plan message with PlanMessageMetadata.
+    let artifact = build_plan_artifact_from_tool_input(
+        &serde_json::json!({
+            "title": "Goal-driven plan test",
+            "summary": "Verify ApplyPlanWithGoal creates a goal."
+        }),
+        1,
+    );
+    let plan_metadata = build_plan_message_metadata(artifact.clone(), "r-planning", "plan");
+    let plan_message = MessageRecord {
+        id: "m-plan".to_string(),
+        thread_id: "t-goal-plan".to_string(),
+        run_id: Some("r-planning".to_string()),
+        role: "assistant".to_string(),
+        content_markdown: "# Goal-driven plan test".to_string(),
+        parts_json: None,
+        message_type: "plan".to_string(),
+        status: "completed".to_string(),
+        metadata_json: serde_json::to_string(&plan_metadata).ok(),
+        attachments_json: None,
+        created_at: String::new(),
+    };
+    message_repo::insert(&pool, &plan_message).await.unwrap();
+
+    // Create the approval_prompt message with ApprovalPromptMetadata (pending).
+    let approval_metadata = ApprovalPromptMetadata {
+        kind: IMPLEMENTATION_PLAN_APPROVAL_KIND.to_string(),
+        plan_revision: 1,
+        plan_message_id: "m-plan".to_string(),
+        state: IMPLEMENTATION_PLAN_PENDING_STATE.to_string(),
+        options: vec![
+            PlanApprovalOption {
+                action: PlanApprovalAction::ApplyPlan,
+                label: PlanApprovalAction::ApplyPlan.label().to_string(),
+            },
+            PlanApprovalOption {
+                action: PlanApprovalAction::ApplyPlanWithContextReset,
+                label: PlanApprovalAction::ApplyPlanWithContextReset
+                    .label()
+                    .to_string(),
+            },
+            PlanApprovalOption {
+                action: PlanApprovalAction::ApplyPlanWithGoal,
+                label: PlanApprovalAction::ApplyPlanWithGoal.label().to_string(),
+            },
+        ],
+        expires_on_new_user_message: true,
+        approved_action: None,
+    };
+    let approval_message = MessageRecord {
+        id: "m-approval".to_string(),
+        thread_id: "t-goal-plan".to_string(),
+        run_id: Some("r-planning".to_string()),
+        role: "assistant".to_string(),
+        content_markdown: "Plan approval prompt".to_string(),
+        parts_json: None,
+        message_type: "approval_prompt".to_string(),
+        status: "completed".to_string(),
+        metadata_json: serde_json::to_string(&approval_metadata).ok(),
+        attachments_json: None,
+        created_at: String::new(),
+    };
+    message_repo::insert(&pool, &approval_message)
+        .await
+        .unwrap();
+
+    // Build AgentRunManager with real dependencies.
+    let goal_runtime_state = Arc::new(StdMutex::new(GoalRuntimeState::default()));
+    let terminal_manager = Arc::new(TerminalManager::new(pool.clone()));
+    let tool_gateway = Arc::new(ToolGateway::new(
+        pool.clone(),
+        Arc::clone(&terminal_manager),
+    ));
+    let runtime = Arc::new(BuiltInAgentRuntime::new(
+        pool.clone(),
+        Arc::clone(&tool_gateway),
+        Arc::clone(&goal_runtime_state),
+    ));
+    let sleep_manager = Arc::new(SleepManager::new());
+    let app_events: Arc<dyn tiycode_lib::core::app_event_emitter::AppEventEmitter> =
+        Arc::new(NoopAppEventEmitter);
+    let manager = Arc::new(AgentRunManager::new(
+        pool.clone(),
+        app_events,
+        runtime,
+        sleep_manager,
+        goal_runtime_state,
+    ));
+
+    // Execute the approved plan with ApplyPlanWithGoal.
+    let result = manager
+        .execute_approved_plan(
+            "t-goal-plan",
+            "m-approval",
+            PlanApprovalAction::ApplyPlanWithGoal,
+        )
+        .await;
+
+    // The run should start successfully (the LLM call happens asynchronously).
+    // Even if it fails, the goal record should already be persisted.
+    if result.is_ok() {
+        // Clean up: cancel the spawned run task to avoid background panics.
+        let _ = manager.cancel_run("t-goal-plan").await;
+    }
+
+    // Verify that a goal record was created in the database.
+    let goal = goal_repo::find_by_thread_id(&pool, "t-goal-plan")
+        .await
+        .expect("query goals");
+    assert!(
+        goal.is_some(),
+        "ApplyPlanWithGoal should create a goal record; execute_approved_plan returned: {:?}",
+        result.as_ref().err()
+    );
+
+    let goal = goal.unwrap();
+    assert_eq!(goal.thread_id, "t-goal-plan");
+    assert_eq!(goal.status, tiycode_lib::model::goal::GoalStatus::Active);
+    assert!(
+        goal.objective.contains("implementation plan"),
+        "goal objective should reference the plan; got: {}",
+        goal.objective
+    );
+}

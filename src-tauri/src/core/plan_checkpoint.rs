@@ -541,6 +541,89 @@ mod tests {
         assert!(approval_prompt_markdown(&artifact).contains("Implement checkpoint"));
     }
 
+    #[tokio::test]
+    async fn build_approval_prompt_metadata_suppresses_goal_option_when_goal_exists() {
+        use crate::model::goal::{GoalRecord, GoalStatus};
+        use crate::persistence::repo::goal_repo;
+        use chrono::Utc;
+
+        let pool = setup_test_pool().await;
+
+        // Seed workspace + thread to satisfy the goals → threads FK.
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-goal', 'Test', '/tmp/test', '/tmp/test', '/tmp/test',
+                     0, 0, 0, 'ready', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, last_active_at, created_at, updated_at)
+             VALUES ('thread-with-goal', 'ws-goal', 'Test', 'idle', ?, ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("seed thread");
+
+        // Insert an active goal for this thread.
+        let goal = GoalRecord {
+            id: "goal-1".to_string(),
+            thread_id: "thread-with-goal".to_string(),
+            objective: "Build feature X".to_string(),
+            status: GoalStatus::Active,
+            token_budget: None,
+            tokens_used: 0,
+            turns_used: 0,
+            max_turns: 50,
+            pause_reason: None,
+            pause_detail: None,
+            evidence: None,
+            last_evaluated_run_id: None,
+            judge_passed: false,
+            judge_completeness: None,
+            judge_findings: None,
+            judge_summary: None,
+            judge_evaluated_run_id: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        goal_repo::insert(&pool, &goal).await.expect("insert goal");
+
+        let artifact = build_plan_artifact_from_tool_input(
+            &serde_json::json!({"title": "Test", "summary": "Test plan."}),
+            1,
+        );
+        let approval = build_approval_prompt_metadata(
+            &pool,
+            "thread-with-goal",
+            artifact.plan_revision,
+            "msg-plan",
+        )
+        .await;
+
+        // When a goal already exists, only 2 options should be returned
+        // (ApplyPlan and ApplyPlanWithContextReset), excluding ApplyPlanWithGoal.
+        assert_eq!(approval.options.len(), 2);
+        assert_eq!(approval.options[0].action, PlanApprovalAction::ApplyPlan);
+        assert_eq!(
+            approval.options[1].action,
+            PlanApprovalAction::ApplyPlanWithContextReset
+        );
+        assert!(!approval
+            .options
+            .iter()
+            .any(|o| o.action == PlanApprovalAction::ApplyPlanWithGoal));
+    }
+
     #[test]
     fn plan_markdown_renders_new_structured_sections() {
         let artifact = build_plan_artifact_from_tool_input(
