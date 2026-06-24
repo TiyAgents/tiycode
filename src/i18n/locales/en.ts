@@ -138,8 +138,10 @@ const en: Record<TranslationKey, string> = {
   // ── Runtime Thread Surface (Plan Approval) ───────────────
   "plan.implementAsPlan": "Implement as planned",
   "plan.clearAndImplement": "Clear context and implement",
+  "plan.goalImplement": "Set goal and implement",
   "plan.approvedClearAndImplement": "Approved: Clear context and implement",
   "plan.approvedImplement": "Approved: Implement as planned",
+  "plan.approvedGoalImplement": "Approved: Set goal and implement",
   "plan.approvedToImplement": "Approved to implement",
   "plan.superseded": "This plan has been superseded by a newer version.",
   "plan.awaitingApproval": "Awaiting implementation approval",

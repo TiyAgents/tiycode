@@ -11,13 +11,15 @@ pub const IMPLEMENTATION_PLAN_SUPERSEDED_STATE: &str = "superseded";
 pub enum PlanApprovalAction {
     ApplyPlan,
     ApplyPlanWithContextReset,
+    ApplyPlanWithGoal,
 }
 
 impl PlanApprovalAction {
     pub fn label(&self) -> &'static str {
         match self {
             Self::ApplyPlan => "按计划实施",
-            Self::ApplyPlanWithContextReset => "清理上下文后按计划实施",
+            Self::ApplyPlanWithContextReset => "清理上下文后实施",
+            Self::ApplyPlanWithGoal => "按计划设置Goal后实施",
         }
     }
 }
@@ -103,27 +105,44 @@ pub fn build_plan_message_metadata(
     }
 }
 
-pub fn build_approval_prompt_metadata(
+pub async fn build_approval_prompt_metadata(
+    pool: &sqlx::SqlitePool,
+    thread_id: &str,
     plan_revision: u32,
     plan_message_id: &str,
 ) -> ApprovalPromptMetadata {
+    let mut options = vec![
+        PlanApprovalOption {
+            action: PlanApprovalAction::ApplyPlan,
+            label: PlanApprovalAction::ApplyPlan.label().to_string(),
+        },
+        PlanApprovalOption {
+            action: PlanApprovalAction::ApplyPlanWithContextReset,
+            label: PlanApprovalAction::ApplyPlanWithContextReset
+                .label()
+                .to_string(),
+        },
+    ];
+
+    // Only offer the goal-driven option when the thread has no existing goal
+    // record (any status: active, paused, budget_limited, or complete).
+    if crate::persistence::repo::goal_repo::find_by_thread_id(pool, thread_id)
+        .await
+        .map(|opt| opt.is_none())
+        .unwrap_or(false)
+    {
+        options.push(PlanApprovalOption {
+            action: PlanApprovalAction::ApplyPlanWithGoal,
+            label: PlanApprovalAction::ApplyPlanWithGoal.label().to_string(),
+        });
+    }
+
     ApprovalPromptMetadata {
         kind: IMPLEMENTATION_PLAN_APPROVAL_KIND.to_string(),
         plan_revision,
         plan_message_id: plan_message_id.to_string(),
         state: IMPLEMENTATION_PLAN_PENDING_STATE.to_string(),
-        options: vec![
-            PlanApprovalOption {
-                action: PlanApprovalAction::ApplyPlan,
-                label: PlanApprovalAction::ApplyPlan.label().to_string(),
-            },
-            PlanApprovalOption {
-                action: PlanApprovalAction::ApplyPlanWithContextReset,
-                label: PlanApprovalAction::ApplyPlanWithContextReset
-                    .label()
-                    .to_string(),
-            },
-        ],
+        options,
         expires_on_new_user_message: true,
         approved_action: None,
     }
@@ -424,6 +443,24 @@ mod tests {
         parse_approval_prompt_metadata, parse_plan_message_metadata, plan_design_markdown,
         plan_markdown, write_plan_file_to, PlanApprovalAction,
     };
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn setup_test_pool() -> sqlx::SqlitePool {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("invalid sqlite options")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("pool");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("migrations");
+        pool
+    }
 
     #[test]
     fn plan_artifact_builder_accepts_string_and_object_steps() {
@@ -470,8 +507,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn metadata_round_trip_is_stable() {
+    #[tokio::test]
+    async fn metadata_round_trip_is_stable() {
+        let pool = setup_test_pool().await;
         let artifact = build_plan_artifact_from_tool_input(
             &serde_json::json!({
                 "title": "Implement checkpoint",
@@ -484,16 +522,106 @@ mod tests {
             parse_plan_message_metadata(&serde_json::to_value(&metadata).unwrap()).unwrap();
         assert_eq!(parsed.artifact, artifact);
 
-        let approval = build_approval_prompt_metadata(artifact.plan_revision, "msg-plan");
+        let approval = build_approval_prompt_metadata(
+            &pool,
+            "thread-no-goal",
+            artifact.plan_revision,
+            "msg-plan",
+        )
+        .await;
         let parsed_approval =
             parse_approval_prompt_metadata(&serde_json::to_value(&approval).unwrap()).unwrap();
         assert_eq!(parsed_approval.plan_revision, 1);
-        assert_eq!(parsed_approval.options.len(), 2);
+        // With no existing goal, the third option (ApplyPlanWithGoal) is included.
+        assert_eq!(parsed_approval.options.len(), 3);
         assert_eq!(
             parsed_approval.options[0].action,
             PlanApprovalAction::ApplyPlan
         );
         assert!(approval_prompt_markdown(&artifact).contains("Implement checkpoint"));
+    }
+
+    #[tokio::test]
+    async fn build_approval_prompt_metadata_suppresses_goal_option_when_goal_exists() {
+        use crate::model::goal::{GoalRecord, GoalStatus};
+        use crate::persistence::repo::goal_repo;
+        use chrono::Utc;
+
+        let pool = setup_test_pool().await;
+
+        // Seed workspace + thread to satisfy the goals → threads FK.
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, path, canonical_path, display_path,
+                    is_default, is_git, auto_work_tree, status, created_at, updated_at)
+             VALUES ('ws-goal', 'Test', '/tmp/test', '/tmp/test', '/tmp/test',
+                     0, 0, 0, 'ready', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("seed workspace");
+
+        sqlx::query(
+            "INSERT INTO threads (id, workspace_id, title, status, last_active_at, created_at, updated_at)
+             VALUES ('thread-with-goal', 'ws-goal', 'Test', 'idle', ?, ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("seed thread");
+
+        // Insert an active goal for this thread.
+        let goal = GoalRecord {
+            id: "goal-1".to_string(),
+            thread_id: "thread-with-goal".to_string(),
+            objective: "Build feature X".to_string(),
+            status: GoalStatus::Active,
+            token_budget: None,
+            tokens_used: 0,
+            turns_used: 0,
+            max_turns: 50,
+            pause_reason: None,
+            pause_detail: None,
+            evidence: None,
+            last_evaluated_run_id: None,
+            judge_passed: false,
+            judge_completeness: None,
+            judge_findings: None,
+            judge_summary: None,
+            judge_evaluated_run_id: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        goal_repo::insert(&pool, &goal).await.expect("insert goal");
+
+        let artifact = build_plan_artifact_from_tool_input(
+            &serde_json::json!({"title": "Test", "summary": "Test plan."}),
+            1,
+        );
+        let approval = build_approval_prompt_metadata(
+            &pool,
+            "thread-with-goal",
+            artifact.plan_revision,
+            "msg-plan",
+        )
+        .await;
+
+        // When a goal already exists, only 2 options should be returned
+        // (ApplyPlan and ApplyPlanWithContextReset), excluding ApplyPlanWithGoal.
+        assert_eq!(approval.options.len(), 2);
+        assert_eq!(approval.options[0].action, PlanApprovalAction::ApplyPlan);
+        assert_eq!(
+            approval.options[1].action,
+            PlanApprovalAction::ApplyPlanWithContextReset
+        );
+        assert!(!approval
+            .options
+            .iter()
+            .any(|o| o.action == PlanApprovalAction::ApplyPlanWithGoal));
     }
 
     #[test]

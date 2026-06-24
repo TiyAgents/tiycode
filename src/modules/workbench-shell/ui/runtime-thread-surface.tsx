@@ -2238,7 +2238,7 @@ export function RuntimeThreadSurface({
     }
 
     preserveContextUsageOnNextEmptySnapshotRef.current = action === "apply_plan";
-    if (action === "apply_plan_with_context_reset") {
+    if (action === "apply_plan_with_context_reset" || action === "apply_plan_with_goal") {
       threadStore.setState({ runtimeContextUsage: null });
     }
     setApprovingPlanMessageId(messageId);

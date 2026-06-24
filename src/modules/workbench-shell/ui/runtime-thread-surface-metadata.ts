@@ -2,7 +2,7 @@
 
 import type { TranslationKey } from "@/i18n";
 
-export type PlanApprovalAction = "apply_plan" | "apply_plan_with_context_reset";
+export type PlanApprovalAction = "apply_plan" | "apply_plan_with_context_reset" | "apply_plan_with_goal";
 
 export type PlanStepMetadata = {
   description?: string;
@@ -152,7 +152,7 @@ export function parseApprovalPromptMetadata(value: unknown, t: (key: Translation
           const action = readStringField(optionRecord, "action");
           const label = readStringField(optionRecord, "label");
           if (
-            (action !== "apply_plan" && action !== "apply_plan_with_context_reset")
+            (action !== "apply_plan" && action !== "apply_plan_with_context_reset" && action !== "apply_plan_with_goal")
             || !label
           ) {
             return null;
@@ -167,6 +167,7 @@ export function parseApprovalPromptMetadata(value: unknown, t: (key: Translation
     approvedAction:
       readStringField(record, "approvedAction") === "apply_plan"
       || readStringField(record, "approvedAction") === "apply_plan_with_context_reset"
+      || readStringField(record, "approvedAction") === "apply_plan_with_goal"
         ? (readStringField(record, "approvedAction") as PlanApprovalAction)
         : null,
     options: options.length > 0

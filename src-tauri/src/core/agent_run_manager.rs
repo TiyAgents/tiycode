@@ -439,11 +439,23 @@ impl AgentRunManager {
 
         plan_metadata.approval_state = IMPLEMENTATION_PLAN_APPROVED_STATE.to_string();
 
-        let implementation_prompt =
-            build_implementation_handoff_prompt(thread_id, &plan_metadata, action.clone());
+        let implementation_prompt = match action {
+            PlanApprovalAction::ApplyPlanWithGoal => {
+                // Build the goal objective text using the plan file path.
+                let plan_path = crate::core::plan_checkpoint::plan_file_path(thread_id)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                format!(
+                    "Please follow the implementation plan {} to complete all implementation, and conduct reviews at each stage following the plan, ensuring the implementation follows the design in the plan and meets quality standards.",
+                    plan_path
+                )
+            }
+            _ => build_implementation_handoff_prompt(thread_id, &plan_metadata, action.clone()),
+        };
         let (history_override, context_seed_messages) = match action {
             PlanApprovalAction::ApplyPlan => (None, None),
-            PlanApprovalAction::ApplyPlanWithContextReset => {
+            PlanApprovalAction::ApplyPlanWithContextReset
+            | PlanApprovalAction::ApplyPlanWithGoal => {
                 let message_bundle = self
                     .build_context_reset_message_bundle(thread_id, &plan_metadata)
                     .await?;
@@ -453,6 +465,19 @@ impl AgentRunManager {
                 )
             }
         };
+
+        // For ApplyPlanWithGoal: create a persistent goal before starting the
+        // implementation run so the goal continuation loop can drive execution.
+        if let PlanApprovalAction::ApplyPlanWithGoal = action {
+            let goal_manager = crate::core::goal_manager::GoalManager::new(
+                self.pool.clone(),
+                thread_id.to_string(),
+                Arc::clone(&self.goal_runtime_state),
+            );
+            goal_manager
+                .create_goal(&implementation_prompt, None)
+                .await?;
+        }
 
         let result = self
             .start_run_with_options(

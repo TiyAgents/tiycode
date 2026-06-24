@@ -136,9 +136,11 @@ const zhCN = {
 
   // ── Runtime Thread Surface (Plan Approval) ───────────────
   "plan.implementAsPlan": "按计划实施",
-  "plan.clearAndImplement": "清理上下文后按计划实施",
-  "plan.approvedClearAndImplement": "已批准：清理上下文后按计划实施",
+  "plan.clearAndImplement": "清理上下文后实施",
+  "plan.goalImplement": "按计划设置Goal后实施",
+  "plan.approvedClearAndImplement": "已批准：清理上下文后实施",
   "plan.approvedImplement": "已批准：按计划实施",
+  "plan.approvedGoalImplement": "已批准：按计划设置Goal后实施",
   "plan.approvedToImplement": "已批准进入实施",
   "plan.superseded": "该计划已被新的规划版本替代。",
   "plan.awaitingApproval": "等待实施审批",

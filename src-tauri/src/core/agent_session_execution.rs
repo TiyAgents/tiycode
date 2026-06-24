@@ -1039,8 +1039,13 @@ impl AgentSession {
         let approval_message_id = uuid::Uuid::now_v7().to_string();
         let plan_metadata =
             build_plan_message_metadata(artifact.clone(), &self.spec.run_id, &self.spec.run_mode);
-        let approval_metadata =
-            build_approval_prompt_metadata(artifact.plan_revision, &plan_message_id);
+        let approval_metadata = build_approval_prompt_metadata(
+            &self.pool,
+            &self.spec.thread_id,
+            artifact.plan_revision,
+            &plan_message_id,
+        )
+        .await;
 
         let plan_message = MessageRecord {
             id: plan_message_id.clone(),
